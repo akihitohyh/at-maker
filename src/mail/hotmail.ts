@@ -316,7 +316,7 @@ async function listFolderMessages(account, folderId) {
         : [];
 }
 
-async function getLatestVerificationMessage(targetEmail, account) {
+async function getLatestVerificationMessage(targetEmail, account, since) {
     const messages = [];
 
     for (const folderId of HOTMAIL_FOLDER_IDS) {
@@ -337,6 +337,7 @@ async function getLatestVerificationMessage(targetEmail, account) {
         })),
         {
             targetEmail,
+            since,
             candidateMatcher: (mail) =>
                 /(OpenAI|ChatGPT)/i.test(
                     `${mail.subject ?? ""}\n${mail.bodyPreview ?? ""}\n${mail.from ?? ""}`,
@@ -380,13 +381,14 @@ export function createHotmailProvider() {
         },
         async getEmailVerificationCode(email) {
             const account = await resolveAccountForEmail(email);
+            const since = Date.now(); // 只看开始轮询后收到的邮件，避免读到旧验证码
 
             for (let attempt = 1; attempt <= HOTMAIL_POLL_ATTEMPTS; attempt += 1) {
                 console.log(
                     `pollHotmailOtp: attempt=${attempt}/${HOTMAIL_POLL_ATTEMPTS} targetEmail=${email} mailbox=${account.loginHint}`,
                 );
 
-                const message = await getLatestVerificationMessage(email, account);
+                const message = await getLatestVerificationMessage(email, account, since);
                 if (message?.verificationCode) {
                     console.log(`hotmailOtpCode: ${message.verificationCode}`);
                     console.log(`hotmailOtpFolder: ${message.folderId}`);

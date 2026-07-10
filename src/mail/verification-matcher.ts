@@ -12,6 +12,7 @@ interface FindVerificationMailOptions<T> {
     targetEmail?: string;
     candidateMatcher?: (mail: T) => boolean;
     rememberLastCode?: boolean;
+    since?: number; // 只处理此时间戳（ms）之后的邮件
 }
 
 const lastVerificationCodeByEmail = new Map<string, string>();
@@ -100,6 +101,11 @@ export function findLatestVerificationMail<T extends VerificationMailCandidate>(
     );
 
     for (const mail of sorted) {
+        // 跳过注册开始前的旧邮件
+        if (options.since && Number(mail.timestamp ?? 0) < options.since) {
+            continue;
+        }
+
         if (targetEmail) {
             const recipients = normalizeRecipientList(mail.recipient);
             if (recipients.length > 0 && !recipients.includes(targetEmail)) {
