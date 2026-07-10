@@ -1,0 +1,26 @@
+{
+  "name": "at-maker",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsup --config tsup.config.ts",
+    "start": "node bundle/index.cjs",
+    "dev:web": "tsx src/server.ts",
+    "start:web": "node bundle/server.cjs"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "fetch-cookie": "^3.1.0",
+    "socks": "^2.8.7",
+    "tough-cookie": "^5.1.1",
+    "undici": "^7.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.2"
+  }
+}

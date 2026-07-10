@@ -1,0 +1,8 @@
+node_modules/
+bundle/
+.DS_Store
+*.log
+config.json
+hotmail/tokens.txt
+auth/at/*.json
+auth/access_tokens.txt

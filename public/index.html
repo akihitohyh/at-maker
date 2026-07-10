@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AT Maker</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e1e4e8;min-height:100vh}
+.container{max-width:640px;margin:0 auto;padding:24px 16px}
+h1{font-size:20px;font-weight:600;margin-bottom:24px;text-align:center}
+label{display:block;font-size:13px;color:#8b949e;margin-bottom:4px;margin-top:14px}
+input,textarea{width:100%;padding:8px 12px;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;font-family:inherit;outline:none;resize:vertical}
+input:focus,textarea:focus{border-color:#58a6ff}
+textarea{height:160px;font-size:12px;font-family:'SF Mono',Consolas,monospace}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}
+button{padding:8px 16px;border:1px solid #30363d;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;background:#21262d;color:#c9d1d9;transition:all .15s}
+button:hover{background:#30363d}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.primary{background:#238636;border-color:#238636;color:#fff}
+button.primary:hover{background:#2ea043}
+button.danger{background:#da3633;border-color:#da3633;color:#fff}
+button.danger:hover{background:#f85149}
+#progress{border:1px solid #30363d;border-radius:6px;margin-top:20px;min-height:100px;max-height:320px;overflow-y:auto;padding:12px;font-size:12px;font-family:'SF Mono',Consolas,monospace;background:#0d1117}
+#progress .s{color:#3fb950}#progress .f{color:#f85149}#progress .i{color:#8b949e}
+.stats{display:flex;gap:24px;margin-bottom:12px;font-size:14px}
+.stats b{color:#58a6ff}
+.spin{display:inline-block;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>AT Maker</h1>
+
+<label>代理地址</label>
+<input id="proxyUrl" placeholder="http://user:pass@host:port">
+
+<label>线程数</label>
+<input id="threads" type="number" value="5" min="1" max="20">
+
+<label>注册数量</label>
+<input id="totalRounds" type="number" value="10" min="1" max="1000">
+
+<label>邮箱池（一行一个：邮箱----密码----client_id----refresh_token）</label>
+<textarea id="emailPool" placeholder="email@outlook.com----password----client_id----refresh_token"></textarea>
+
+<div class="btn-row">
+<button onclick="saveConfig()">💾 保存配置</button>
+<button onclick="updateEmailPool()">📧 更新邮箱池</button>
+<button id="btnStart" class="primary" onclick="startReg()">▶ 开始注册</button>
+<button id="btnStop" class="danger hidden" onclick="stopReg()">⏹ 停止注册</button>
+<button id="btnDownload" onclick="downloadTokens()">⬇ 下载 access_tokens.txt</button>
+</div>
+
+<div class="stats" id="stats" style="margin-top:20px">
+  <span>成功: <b id="statOk">0</b></span>
+  <span>失败: <b id="statFail">0</b></span>
+  <span>进度: <b id="statProg">0/0</b></span>
+  <span id="statRunning" class="hidden">🔵运行中 <span class="spin">⟳</span></span>
+</div>
+
+<div id="progress"><div class="i">等待开始...</div></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let logLines=[];
+
+function addLog(msg,cls='i'){
+  logLines.push([cls,msg]);
+  if(logLines.length>200)logLines.shift();
+  $('progress').innerHTML=logLines.map(([c,m])=>`<div class="${c}">${m}</div>`).join('');
+  $('progress').scrollTop=$('progress').scrollHeight;
+}
+
+async function api(url,body){
+  const r=await fetch(url,{method:body?'POST':'GET',headers:body?{'content-type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});
+  return r.json();
+}
+
+// SSE
+const evt=new EventSource('/api/events');
+evt.addEventListener('progress',e=>{
+  const d=JSON.parse(e.data);
+  if(d.type==='success'){addLog(`✅ 第${d.round}轮 ${d.email}`, 's');$('statOk').textContent=d.success;$('statProg').textContent=d.round+'/'+d.total}
+  else if(d.type==='fail'){addLog(`❌ 第${d.round}轮 ${d.error?.slice(0,80)}`, 'f');$('statFail').textContent=d.fail;$('statProg').textContent=d.round+'/'+d.total}
+  else if(d.type==='progress'){$('statProg').textContent=d.round+'/'+d.total;addLog(`[${d.round}/${d.total}] 开始注册...`,'i')}
+  else if(d.type==='done'){onDone();addLog(`结束: 成功=${d.success} 失败=${d.fail}`,'i')}
+});
+
+async function loadConfig(){
+  const r=await api('/api/config');
+  if(r.ok){
+    $('proxyUrl').value=r.config.defaultProxyUrl||'';
+    $('emailPool').value=r.emailPool||'';
+  }
+  const s=await api('/api/status');
+  if(s.running) setRunning(true);
+}
+loadConfig();
+
+function setRunning(v){
+  $('btnStart').classList.toggle('hidden',v);
+  $('btnStop').classList.toggle('hidden',!v);
+  $('statRunning').classList.toggle('hidden',!v);
+}
+function onDone(){setRunning(false)}
+
+async function saveConfig(){
+  const r=await api('/api/config',{proxyUrl:$('proxyUrl').value.trim(),loopDelayMs:1000,password:'kuaileshifu88'});
+  addLog(r.ok?'配置已保存':'保存失败: '+r.error, r.ok?'s':'f');
+}
+async function updateEmailPool(){
+  const emails=$('emailPool').value.trim();
+  if(!emails){addLog('邮箱池不能为空','f');return}
+  const r=await api('/api/email-pool',{emails});
+  addLog(r.ok?`邮箱池已更新，${r.count} 个账号`:'更新失败: '+r.error, r.ok?'s':'f');
+}
+async function startReg(){
+  const proxyUrl=$('proxyUrl').value.trim();
+  if(!proxyUrl){addLog('请填写代理地址','f');return}
+  const threads=parseInt($('threads').value)||5;
+  const totalRounds=parseInt($('totalRounds').value)||10;
+  // auto-save config & email pool before starting
+  await saveConfig();
+  await updateEmailPool();
+  const r=await api('/api/start',{proxyUrl,threads,totalRounds,password:'kuaileshifu88',loopDelayMs:1000});
+  if(r.ok){setRunning(true);addLog(`开始: ${threads}线程 ${totalRounds}个`,'i')}
+  else addLog('启动失败: '+r.error,'f');
+}
+async function stopReg(){
+  await api('/api/stop');
+  setRunning(false);
+  addLog('已请求停止','i');
+}
+async function downloadTokens(){
+  const resp=await fetch('/api/download');
+  if(!resp.ok){addLog('暂无文件可下载','f');return}
+  const blob=await resp.blob();
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`access_tokens_${Date.now()}.txt`;
+  a.click();
+  addLog('下载完成，服务端已删除旧文件','s');
+}
+</script>
+</body>
+</html>
