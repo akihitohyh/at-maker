@@ -7,7 +7,7 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e1e4e8;min-height:100vh}
-.container{max-width:640px;margin:0 auto;padding:24px 16px}
+.container{max-width:800px;margin:0 auto;padding:24px 16px}
 h1{font-size:20px;font-weight:600;margin-bottom:24px;text-align:center}
 label{display:block;font-size:13px;color:#8b949e;margin-bottom:4px;margin-top:14px}
 input,textarea{width:100%;padding:8px 12px;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;font-family:inherit;outline:none;resize:vertical}
@@ -21,8 +21,8 @@ button.primary{background:#238636;border-color:#238636;color:#fff}
 button.primary:hover{background:#2ea043}
 button.danger{background:#da3633;border-color:#da3633;color:#fff}
 button.danger:hover{background:#f85149}
-#progress{border:1px solid #30363d;border-radius:6px;margin-top:20px;min-height:100px;max-height:320px;overflow-y:auto;padding:12px;font-size:12px;font-family:'SF Mono',Consolas,monospace;background:#0d1117}
-#progress .s{color:#3fb950}#progress .f{color:#f85149}#progress .i{color:#8b949e}
+#progress{border:1px solid #30363d;border-radius:6px;margin-top:20px;min-height:100px;max-height:600px;overflow-y:auto;padding:12px;font-size:12px;font-family:'SF Mono',Consolas,monospace;background:#0d1117;white-space:pre-wrap;word-break:break-all}
+#progress .s{color:#3fb950}#progress .f{color:#f85149}#progress .i{color:#8b949e}#progress .l{color:#c9d1d9}
 .stats{display:flex;gap:24px;margin-bottom:12px;font-size:14px}
 .stats b{color:#58a6ff}
 .spin{display:inline-block;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
@@ -35,6 +35,27 @@ button.danger:hover{background:#f85149}
 
 <label>代理地址</label>
 <input id="proxyUrl" placeholder="http://user:pass@host:port">
+
+<label>接码模式</label>
+<div style="display:flex;gap:16px;flex-wrap:wrap">
+<label style="margin:0;display:flex;align-items:center;gap:4px;cursor:pointer">
+<input type="radio" name="mailApiMode" value="auto" onchange="saveMailApiMode()" checked> 自动（推荐）
+</label>
+<label style="margin:0;display:flex;align-items:center;gap:4px;cursor:pointer">
+<input type="radio" name="mailApiMode" value="imap" onchange="saveMailApiMode()"> IMAP（outlook 权限）
+</label>
+<label style="margin:0;display:flex;align-items:center;gap:4px;cursor:pointer">
+<input type="radio" name="mailApiMode" value="graph" onchange="saveMailApiMode()"> Graph API
+</label>
+</div>
+
+<label>别名后缀（空白=不加别名，如输入 +1 则生成 email+1@domain）</label>
+<div style="display:flex;gap:12px;align-items:center">
+<input id="aliasSuffix" placeholder="留空表示不加别名" style="flex:1">
+<label style="margin:0;display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer">
+<input type="checkbox" id="randomAlias" onchange="saveRandomAlias()"> 随机后缀
+</label>
+</div>
 
 <label>线程数</label>
 <input id="threads" type="number" value="5" min="1" max="20">
@@ -51,6 +72,7 @@ button.danger:hover{background:#f85149}
 <button id="btnStart" class="primary" onclick="startReg()">▶ 开始注册</button>
 <button id="btnStop" class="danger hidden" onclick="stopReg()">⏹ 停止注册</button>
 <button id="btnDownload" onclick="downloadTokens()">⬇ 下载 access_tokens.txt</button>
+<button onclick="clearLogs()">🗑 清空日志</button>
 </div>
 
 <div class="stats" id="stats" style="margin-top:20px">
@@ -66,12 +88,27 @@ button.danger:hover{background:#f85149}
 <script>
 const $=id=>document.getElementById(id);
 let logLines=[];
+const MAX_LOG_LINES = 2000;
 
 function addLog(msg,cls='i'){
   logLines.push([cls,msg]);
-  if(logLines.length>200)logLines.shift();
+  while(logLines.length > MAX_LOG_LINES) logLines.shift();
   $('progress').innerHTML=logLines.map(([c,m])=>`<div class="${c}">${m}</div>`).join('');
   $('progress').scrollTop=$('progress').scrollHeight;
+}
+
+async function saveMailApiMode(){
+  const mode=document.querySelector('input[name="mailApiMode"]:checked').value;
+  await api('/api/mail-api-mode',{mode});
+}
+
+async function saveRandomAlias(){
+  await api('/api/random-alias',{enabled:$('randomAlias').checked});
+}
+
+function clearLogs(){
+  logLines=[];
+  $('progress').innerHTML='<div class="i">日志已清空</div>';
 }
 
 async function api(url,body){
@@ -83,10 +120,12 @@ async function api(url,body){
 const evt=new EventSource('/api/events');
 evt.addEventListener('progress',e=>{
   const d=JSON.parse(e.data);
-  if(d.type==='success'){addLog(`✅ 第${d.round}轮 ${d.email}`, 's');$('statOk').textContent=d.success;$('statProg').textContent=d.round+'/'+d.total}
-  else if(d.type==='fail'){addLog(`❌ 第${d.round}轮 ${d.error?.slice(0,80)}`, 'f');$('statFail').textContent=d.fail;$('statProg').textContent=d.round+'/'+d.total}
+  if(d.type==='success'){addLog(`✅ 第${d.round}轮 成功 ${d.email}`, 's');$('statOk').textContent=d.success;$('statProg').textContent=d.round+'/'+d.total}
+  else if(d.type==='fail'){addLog(`❌ 第${d.round}轮 失败 ${d.error}`, 'f');$('statFail').textContent=d.fail;$('statProg').textContent=d.round+'/'+d.total}
   else if(d.type==='progress'){$('statProg').textContent=d.round+'/'+d.total;addLog(`[${d.round}/${d.total}] 开始注册...`,'i')}
-  else if(d.type==='done'){onDone();addLog(`结束: 成功=${d.success} 失败=${d.fail}`,'i')}
+  else if(d.type==='stopped'){setRunning(false);addLog(d.message||'已立即停止','s')}
+  else if(d.type==='done'){onDone();addLog(`===== 结束: 成功=${d.success} 失败=${d.fail} =====`,'i')}
+  else if(d.type==='log'){addLog(d.message||'', 'l')}
 });
 
 async function loadConfig(){
@@ -94,6 +133,11 @@ async function loadConfig(){
   if(r.ok){
     $('proxyUrl').value=r.config.defaultProxyUrl||'';
     $('emailPool').value=r.emailPool||'';
+    $('aliasSuffix').value=r.aliasSuffix||'';
+    $('randomAlias').checked=r.randomAliasEnabled||false;
+    const mailMode=r.mailApiMode||'auto';
+    const radio=document.querySelector('input[name="mailApiMode"][value="'+mailMode+'"]');
+    if(radio) radio.checked=true;
   }
   const s=await api('/api/status');
   if(s.running) setRunning(true);
@@ -109,7 +153,9 @@ function onDone(){setRunning(false)}
 
 async function saveConfig(){
   const r=await api('/api/config',{proxyUrl:$('proxyUrl').value.trim(),loopDelayMs:1000,password:'kuaileshifu88'});
-  addLog(r.ok?'配置已保存':'保存失败: '+r.error, r.ok?'s':'f');
+  const aliasSuffix=$('aliasSuffix').value.trim();
+  const a=await api('/api/alias-suffix',{suffix:aliasSuffix});
+  addLog((r.ok&&a.ok)?'配置已保存':'保存失败: '+(r.error||a.error), (r.ok&&a.ok)?'s':'f');
 }
 async function updateEmailPool(){
   const emails=$('emailPool').value.trim();
@@ -130,9 +176,10 @@ async function startReg(){
   else addLog('启动失败: '+r.error,'f');
 }
 async function stopReg(){
-  await api('/api/stop');
+  addLog('正在立即停止当前任务...','i');
   setRunning(false);
-  addLog('已请求停止','i');
+  const r=await api('/api/stop');
+  addLog(r && r.ok===false ? ('停止失败: '+(r.error||'unknown')) : '已立即中断，无需等待本轮结束','s');
 }
 async function downloadTokens(){
   const resp=await fetch('/api/download');

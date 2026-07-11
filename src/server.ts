@@ -3,6 +3,7 @@ import {readFile, writeFile, rm, mkdir} from "node:fs/promises";
 import {existsSync} from "node:fs";
 import path from "node:path";
 import {RegistrationRunner, type RunnerConfig} from "./registration-runner.js";
+import {getAliasSuffix, setAliasSuffix, getRandomAliasEnabled, setRandomAliasEnabled, getMailApiMode, setMailApiMode, clearAccountCache} from "./mailbox.js";
 
 const app = express();
 app.use(express.json({limit: "1mb"}));
@@ -52,7 +53,13 @@ app.get("/api/config", async (_req, res) => {
         const config = JSON.parse(raw);
         let emailPool = "";
         try { emailPool = await readFile(TOKENS_FILE, "utf8"); } catch {}
-        res.json({ok: true, config, emailPool});
+        let aliasSuffix = "";
+        try { aliasSuffix = getAliasSuffix(); } catch {}
+        let randomAliasEnabled = false;
+        try { randomAliasEnabled = getRandomAliasEnabled(); } catch {}
+        let mailApiMode = "auto";
+        try { mailApiMode = getMailApiMode(); } catch {}
+        res.json({ok: true, config, emailPool, aliasSuffix, randomAliasEnabled, mailApiMode});
     } catch (err) {
         res.json({ok: false, error: String(err)});
     }
@@ -84,7 +91,51 @@ app.post("/api/email-pool", async (req, res) => {
         const dir = path.dirname(TOKENS_FILE);
         await mkdir(dir, {recursive: true});
         await writeFile(TOKENS_FILE, emails.trim().replace(/\r\n/g, "\n") + "\n", "utf8");
+        clearAccountCache();
         res.json({ok: true, count: emails.trim().split(/\n/).filter(Boolean).length});
+    } catch (err) {
+        res.json({ok: false, error: String(err)});
+    }
+});
+
+// GET /api/alias-suffix — get alias suffix
+app.get("/api/alias-suffix", (_req, res) => {
+    try {
+        const suffix = getAliasSuffix();
+        res.json({ok: true, suffix});
+    } catch (err) {
+        res.json({ok: false, error: String(err)});
+    }
+});
+
+// POST /api/alias-suffix — set alias suffix
+app.post("/api/alias-suffix", async (req, res) => {
+    try {
+        const {suffix} = req.body;
+        await setAliasSuffix(String(suffix ?? "").trim());
+        res.json({ok: true, suffix: getAliasSuffix()});
+    } catch (err) {
+        res.json({ok: false, error: String(err)});
+    }
+});
+
+// POST /api/random-alias — toggle random alias
+app.post("/api/random-alias", (req, res) => {
+    try {
+        const {enabled} = req.body;
+        setRandomAliasEnabled(!!enabled);
+        res.json({ok: true, randomAliasEnabled: getRandomAliasEnabled()});
+    } catch (err) {
+        res.json({ok: false, error: String(err)});
+    }
+});
+
+// POST /api/mail-api-mode — set mail API mode
+app.post("/api/mail-api-mode", (req, res) => {
+    try {
+        const {mode} = req.body;
+        setMailApiMode(String(mode || "auto"));
+        res.json({ok: true, mailApiMode: getMailApiMode()});
     } catch (err) {
         res.json({ok: false, error: String(err)});
     }
@@ -115,7 +166,8 @@ app.post("/api/start", async (req, res) => {
 });
 
 // POST /api/stop — stop registration
-app.post("/api/stop", (_req, res) => {
+app.post("/api/stop", (_req, res) => { runner.stop(); res.json({ok: true}); });
+app.get("/api/stop", (_req, res) => {
     runner.stop();
     res.json({ok: true});
 });

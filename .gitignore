@@ -4,5 +4,9 @@ bundle/
 *.log
 config.json
 hotmail/tokens.txt
+hotmail/alias_suffix.txt
 auth/at/*.json
 auth/access_tokens.txt
+**/*.bak
+**/*.bak.*
+**/._*

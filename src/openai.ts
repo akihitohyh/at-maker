@@ -18,10 +18,62 @@ import {
     CHATGPT_BASE_URL,
     DEFAULT_USER_AGENT,
 } from "./constants.js";
-import {getEmailAddress, getEmailVerificationCode} from "./mailbox.js";
+import {
+    getEmailAddress,
+    getEmailVerificationCode,
+    prepareOtpBaseline,
+    markVerificationCodeRejected,
+    clearOtpPollState,
+    getAbortSignal,
+} from "./mailbox.js";
 import {fetchSentinelToken} from "./sentinel.js";
 
 type FetchLike = typeof fetch;
+
+const REGISTRATION_ABORT_MESSAGE = "Registration aborted by user";
+
+function throwIfRegistrationAborted(): void {
+    const signal = getAbortSignal();
+    if (signal?.aborted) {
+        throw new Error(REGISTRATION_ABORT_MESSAGE);
+    }
+}
+
+function mergeAbortSignals(
+    ...signals: Array<AbortSignal | undefined | null>
+): AbortSignal | undefined {
+    const list = signals.filter((s): s is AbortSignal => !!s);
+    if (list.length === 0) return undefined;
+    if (list.length === 1) return list[0];
+    // Node 20+: AbortSignal.any
+    const anyFn = (AbortSignal as unknown as {any?: (s: AbortSignal[]) => AbortSignal}).any;
+    if (typeof anyFn === "function") {
+        return anyFn.call(AbortSignal, list);
+    }
+    // Fallback: first signal only
+    return list[0];
+}
+
+function sleepAbortable(ms: number, signal?: AbortSignal | null): Promise<void> {
+    if (!signal) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    if (signal.aborted) {
+        return Promise.reject(new Error(REGISTRATION_ABORT_MESSAGE));
+    }
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", onAbort);
+            reject(new Error(REGISTRATION_ABORT_MESSAGE));
+        };
+        signal.addEventListener("abort", onAbort, {once: true});
+    });
+}
 
 const DEFAULT_INSECURE_TLS = true;
 const FETCH_RETRY_COUNT = 3;
@@ -192,42 +244,54 @@ export class OpenAIClient {
         ];
         let totalSteps = stepMessages.length;
         let step = 1;
+
+        throwIfRegistrationAborted();
         this.logProgress(step++, totalSteps, "初始化注册会话");
         await this.bootChatGPTSession();
+
+        throwIfRegistrationAborted();
         this.logProgress(step++, totalSteps, "生成注册邮箱");
         this.email = await this.generateRegisterEmail();
         console.log("registerEmail:", this.email);
+
+        throwIfRegistrationAborted();
         this.logProgress(step++, totalSteps, "打开注册页");
         await this.openSignupPage(this.email);
 
+        throwIfRegistrationAborted();
         this.logProgress(step++, totalSteps, "提交注册邮箱");
         let continueURL = await this.authorizeContinueForSignup();
 
         if (continueURL === `${AUTH_BASE_URL}/create-account/password`) {
+            throwIfRegistrationAborted();
             totalSteps += 1;
             this.logProgress(step++, totalSteps, "提交注册密码");
             continueURL = await this.registerPassword();
         }
 
         if (continueURL === AUTH_EMAIL_OTP_SEND_URL) {
+            throwIfRegistrationAborted();
             totalSteps += 1;
             this.logProgress(step++, totalSteps, "发送邮箱验证码");
             continueURL = await this.sendEmailOtp();
         }
 
         if (continueURL === `${AUTH_BASE_URL}/email-verification`) {
+            throwIfRegistrationAborted();
             totalSteps += 1;
             this.logProgress(step++, totalSteps, "提交邮箱验证码");
             continueURL = await this.emailOtpValidate();
         }
 
         if (continueURL === `${AUTH_BASE_URL}/about-you`) {
+            throwIfRegistrationAborted();
             totalSteps += 1;
             this.logProgress(step++, totalSteps, "填写基础资料");
             continueURL = await this.completeAboutYou();
         }
 
         if (continueURL.startsWith(`${CHATGPT_BASE_URL}/api/auth/callback/openai`)) {
+            throwIfRegistrationAborted();
             totalSteps += 1;
             this.logProgress(step++, totalSteps, "完成注册");
             await this.finishChatGPTRegistration(continueURL);
@@ -392,9 +456,7 @@ export class OpenAIClient {
             },
         );
         if (!response.ok) {
-            throw new Error(
-                `AuthorizeContinue注册请求失败: ${await this.formatErrorResponse(response)}`,
-            );
+            await this.throwStepError("AuthorizeContinue", response);
         }
         const payload = (await response.json()) as ContinueResponse;
         return payload.continue_url;
@@ -414,15 +476,20 @@ export class OpenAIClient {
             },
         );
         if (!response.ok) {
-            throw new Error(
-                `RegisterPassword请求失败: ${await this.formatErrorResponse(response)}`,
-            );
+            await this.throwStepError("RegisterPassword", response);
         }
         const payload = (await response.json()) as ContinueResponse;
         return payload.continue_url;
     }
 
     private async sendEmailOtp(): Promise<string> {
+        // Snapshot mailbox BEFORE OpenAI sends the code, so the new OTP is not treated as stale
+        try {
+            await prepareOtpBaseline(this.email);
+        } catch (err) {
+            console.log(`prepareOtpBaseline warning: ${String(err).slice(0, 160)}`);
+        }
+
         const response = await this.fetch(AUTH_EMAIL_OTP_SEND_URL, {
             method: "GET",
             headers: {
@@ -439,34 +506,75 @@ export class OpenAIClient {
             },
         });
         if (!response.ok) {
-            throw new Error(
-                `EmailOtpSend请求失败: ${await this.formatErrorResponse(response)}`,
-            );
+            await this.throwStepError("EmailOtpSend", response);
         }
         const payload = (await response.json()) as ContinueResponse;
         return payload.continue_url;
     }
 
     private async emailOtpValidate(): Promise<string> {
-        const code = await this.resolveEmailOtpCode();
-        const response = await this.fetch(AUTH_EMAIL_OTP_VALIDATE_URL, {
-            method: "POST",
-            headers: {
-                accept: "application/json",
-                "content-type": "application/json",
-                origin: AUTH_BASE_URL,
-                referer: `${AUTH_BASE_URL}/email-verification`,
-                "user-agent": this.userAgent,
-            },
-            body: JSON.stringify({code}),
-        });
-        if (!response.ok) {
-            throw new Error(
-                `EmailOtpValidate请求失败: ${await this.formatErrorResponse(response)}`,
-            );
+        // Retry when mailbox returns a stale/wrong code (common with reused hotmail accounts)
+        const maxAttempts = 4;
+        let lastDetail = "";
+
+        // Safety: if flow skipped sendEmailOtp, still try to baseline before first poll
+        try {
+            await prepareOtpBaseline(this.email);
+        } catch (err) {
+            console.log(`prepareOtpBaseline(validate) warning: ${String(err).slice(0, 160)}`);
         }
-        const payload = (await response.json()) as ContinueResponse;
-        return payload.continue_url;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const code = await this.resolveEmailOtpCode();
+            console.log(`emailOtpValidate: attempt=${attempt}/${maxAttempts} code=${code}`);
+
+            const response = await this.fetch(AUTH_EMAIL_OTP_VALIDATE_URL, {
+                method: "POST",
+                headers: {
+                    accept: "application/json",
+                    "content-type": "application/json",
+                    origin: AUTH_BASE_URL,
+                    referer: `${AUTH_BASE_URL}/email-verification`,
+                    "user-agent": this.userAgent,
+                },
+                body: JSON.stringify({code}),
+            });
+
+            if (response.ok) {
+                const payload = (await response.json()) as ContinueResponse;
+                clearOtpPollState(this.email);
+                return payload.continue_url;
+            }
+
+            const body = await response.text();
+            let errCode = "";
+            try {
+                const payload = JSON.parse(body) as {error?: {code?: string | null}};
+                errCode = payload.error?.code ?? "";
+            } catch {}
+            lastDetail = errCode
+                ? `${response.status} code=${errCode}`
+                : `${response.status} body=${body.slice(0, 200)}`;
+
+            const retryable =
+                errCode === "wrong_email_otp_code" ||
+                errCode === "email_otp_invalid" ||
+                errCode === "invalid_code";
+
+            if (retryable && attempt < maxAttempts) {
+                console.log(
+                    `emailOtpValidate: reject stale/wrong code=${code} (${errCode}), continue polling for newer OTP`,
+                );
+                markVerificationCodeRejected(this.email, code);
+                // Brief wait so a just-arrived mail is more likely visible next poll
+                await sleepAbortable(1500, getAbortSignal());
+                continue;
+            }
+
+            throw new Error(`EmailOtpValidate: ${lastDetail} email=${this.email}`);
+        }
+
+        throw new Error(`EmailOtpValidate: ${lastDetail || "exhausted retries"} email=${this.email}`);
     }
 
     private async completeAboutYou(): Promise<string> {
@@ -483,9 +591,7 @@ export class OpenAIClient {
             },
         );
         if (!response.ok) {
-            throw new Error(
-                `CreateAccount请求失败: ${await this.formatErrorResponse(response)}`,
-            );
+            await this.throwStepError("CreateAccount", response);
         }
         const payload = (await response.json()) as ContinueResponse;
         return payload.page?.payload?.url ?? payload.continue_url;
@@ -642,6 +748,19 @@ export class OpenAIClient {
         });
     }
 
+    private async throwStepError(step: string, response: Response): Promise<never> {
+        const body = await response.text();
+        let code = "";
+        try {
+            const payload = JSON.parse(body) as {
+                error?: { code?: string | null };
+            };
+            code = payload.error?.code ?? "";
+        } catch {}
+        const detail = code ? `${response.status} code=${code}` : `${response.status} body=${body}`;
+        throw new Error(`${step}: ${detail} email=${this.email}`);
+    }
+
     private async formatErrorResponse(response: Response): Promise<string> {
         const body = await response.text();
         try {
@@ -667,12 +786,32 @@ export class OpenAIClient {
         input: Parameters<FetchLike>[0],
         init?: Parameters<FetchLike>[1],
     ): Promise<Response> {
+        throwIfRegistrationAborted();
+        const regSignal = getAbortSignal();
+        const nextInit: RequestInit = {...(init ?? {})};
+        const merged = mergeAbortSignals(regSignal, init?.signal ?? undefined);
+        if (merged) {
+            nextInit.signal = merged;
+        }
+
         let lastError: unknown;
         for (let attempt = 1; attempt <= FETCH_RETRY_COUNT; attempt++) {
+            throwIfRegistrationAborted();
             try {
-                return await baseFetch(input, init);
+                return await baseFetch(input, nextInit);
             } catch (error) {
                 lastError = error;
+                // User stop: never retry
+                if (
+                    regSignal?.aborted ||
+                    (error instanceof Error &&
+                        (/aborted by user|The operation was aborted|AbortError/i.test(
+                            error.message,
+                        ) ||
+                            error.name === "AbortError"))
+                ) {
+                    throw new Error(REGISTRATION_ABORT_MESSAGE);
+                }
                 if (!isRetryableFetchError(error) || attempt >= FETCH_RETRY_COUNT) {
                     throw error;
                 }
@@ -680,7 +819,7 @@ export class OpenAIClient {
                     `[网络重试 ${attempt}/${FETCH_RETRY_COUNT}] ${this.describeRetryTarget(input)} ${this.describeRetryError(error)}`,
                 );
                 console.log(`[延迟] 网络重试等待 ${FETCH_RETRY_DELAY_MS * attempt}ms`);
-                await sleep(FETCH_RETRY_DELAY_MS * attempt);
+                await sleepAbortable(FETCH_RETRY_DELAY_MS * attempt, regSignal);
             }
         }
         throw lastError instanceof Error ? lastError : new Error(String(lastError));
