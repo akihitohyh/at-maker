@@ -59,3 +59,6 @@ npm run dev:web
 
 - `auth/at/` — 每个账号一个 JSON 文件，包含 accessToken
 - `auth/access_tokens.txt` — 所有 accessToken 汇总
+
+## 致谢
+<https://linux.do>
