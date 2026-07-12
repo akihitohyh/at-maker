@@ -9,6 +9,7 @@ import {
     extractAllVerificationCodes,
     markVerificationCodeRejected,
     clearRememberedVerificationCode,
+    clearRejectedVerificationCodes,
     extractMailTextContent,
 } from "./verification-matcher.js";
 
@@ -166,6 +167,38 @@ function isAccessTokenExpired(account) {
     return Date.now() >= expireAtMs - 60 * 1000;
 }
 
+function looksLikeHttpUrl(value) {
+    return /^https?:\/\//i.test(String(value ?? "").trim());
+}
+
+/**
+ * Normalize mailapi-style fetch URLs to prefer machine-readable JSON.
+ * Accepts seller lines like:
+ *   email----https://mailapi.icu/key?type=html&orderNo=xxx
+ * and rewrites type=html/code → type=json when safe.
+ */
+function normalizeMailApiFetchUrl(rawUrl) {
+    const input = String(rawUrl ?? "").trim();
+    if (!looksLikeHttpUrl(input)) {
+        return "";
+    }
+    try {
+        const url = new URL(input);
+        const type = String(url.searchParams.get("type") || "").toLowerCase();
+        // Prefer json for programmatic OTP extraction; keep explicit type=code.
+        if (!type || type === "html") {
+            url.searchParams.set("type", "json");
+        }
+        return url.toString();
+    } catch {
+        return input;
+    }
+}
+
+function isApiMailAccount(account) {
+    return account?.sourceType === "api" || !!String(account?.mailApiUrl || "").trim();
+}
+
 async function loadTextAccounts() {
     try {
         const raw = await readFile(HOTMAIL_TOKENS_FILE, "utf8");
@@ -174,8 +207,50 @@ async function loadTextAccounts() {
             .map((line) => line.trim())
             .filter(Boolean)
             .map((line, index) => {
-                const [email, password, clientId, refreshToken] = line.split("----");
+                const parts = line.split("----").map((p) => String(p ?? "").trim());
+                const email = parts[0] || "";
                 const loginHint = normalizeEmail(email);
+                if (!loginHint) {
+                    return null;
+                }
+
+                // API pickup: email----https://mailapi.icu/key?...orderNo=...
+                // Also accept email----password----https://... (password ignored).
+                const apiField = parts.find((p, i) => i > 0 && looksLikeHttpUrl(p));
+                if (apiField) {
+                    const mailApiUrl = normalizeMailApiFetchUrl(apiField);
+                    if (!mailApiUrl) {
+                        return null;
+                    }
+                    return {
+                        sourceType: "api",
+                        fileName: path.basename(HOTMAIL_TOKENS_FILE),
+                        filePath: HOTMAIL_TOKENS_FILE,
+                        lineIndex: index,
+                        lineRaw: line,
+                        loginHint,
+                        password: "",
+                        sourceAccount: loginHint,
+                        tenant: "consumers",
+                        clientId: "",
+                        redirectUri: "",
+                        scope: "",
+                        tokenType: "",
+                        accessToken: "",
+                        refreshToken: "",
+                        idToken: "",
+                        obtainedAt: "",
+                        expiresIn: 0,
+                        extExpiresIn: 0,
+                        mailApiUrl,
+                        raw: {},
+                    };
+                }
+
+                // OAuth: email----password----client_id----refresh_token
+                const password = parts[1] || "";
+                const clientId = parts[2] || "";
+                const refreshToken = parts[3] || "";
                 const account = {
                     sourceType: "txt",
                     fileName: path.basename(HOTMAIL_TOKENS_FILE),
@@ -183,22 +258,23 @@ async function loadTextAccounts() {
                     lineIndex: index,
                     lineRaw: line,
                     loginHint,
-                    password: String(password ?? "").trim(),
+                    password,
                     sourceAccount: loginHint,
                     tenant: "consumers",
-                    clientId: String(clientId ?? "").trim(),
+                    clientId,
                     redirectUri: "",
                     scope: "",
                     tokenType: "Bearer",
                     accessToken: "",
-                    refreshToken: String(refreshToken ?? "").trim(),
+                    refreshToken,
                     idToken: "",
                     obtainedAt: "",
                     expiresIn: 0,
                     extExpiresIn: 0,
+                    mailApiUrl: "",
                     raw: {},
                 };
-                return loginHint && account.clientId && account.refreshToken ? account : null;
+                return account.clientId && account.refreshToken ? account : null;
             })
             .filter(Boolean);
     } catch (error) {
@@ -225,6 +301,10 @@ async function loadAccounts() {
 }
 
 async function persistTextAccount(account) {
+    // API-url accounts have no rotating refresh_token; keep original line as-is.
+    if (isApiMailAccount(account)) {
+        return;
+    }
     const raw = await readFile(HOTMAIL_TOKENS_FILE, "utf8");
     const lines = raw.split(/\r?\n/);
     const nextLine = [
@@ -1046,6 +1126,393 @@ async function resolveAccountForEmail(email) {
     throw new Error("Hotmail 未找到与邮箱匹配的 token: " + email);
 }
 
+function extractCodeFromText(text) {
+    const source = String(text ?? "");
+    if (!source) return "";
+    // Prefer codes near verification keywords (CN/EN)
+    const keywordPatterns = [
+        /(?:验证码|校验码|动态码|安全码|临时验证码|verification code|security code|one[- ]?time(?: code| password)?|otp)[^\d]{0,40}?(\d{4,8})/i,
+        /(\d{4,8})[^\d]{0,20}(?:验证码|校验码|verification code)/i,
+    ];
+    for (const re of keywordPatterns) {
+        const m = source.match(re);
+        if (m?.[1]) return m[1];
+    }
+    // Fallback: first standalone 6-digit (OpenAI OTP length)
+    const six = source.match(/(?<!\d)(\d{6})(?!\d)/);
+    if (six?.[1]) return six[1];
+    const any = source.match(/(?<!\d)(\d{4,8})(?!\d)/);
+    return any?.[1] || "";
+}
+
+function normalizeApiMailItem(item, index = 0) {
+    if (!item || typeof item !== "object") return null;
+    const verificationCode = String(
+        item.verification_code ??
+            item.verificationCode ??
+            item.code ??
+            item.otp ??
+            "",
+    ).replace(/\D/g, "");
+    const text = String(item.text ?? item.body ?? item.content ?? item.html ?? "");
+    const subject = String(item.subject ?? item.title ?? "");
+    const send = normalizeEmail(item.send ?? item.from ?? item.sender ?? "");
+    const dateRaw = String(item.date ?? item.receivedDateTime ?? item.time ?? "");
+    const receivedAtMs = Date.parse(dateRaw) || 0;
+    const code = (verificationCode || extractCodeFromText(`${subject}\n${text}`)).slice(0, 8);
+    return {
+        id: String(item.id ?? `${send}|${subject}|${dateRaw}|${code}|${index}`),
+        send,
+        subject,
+        text,
+        verificationCode: code,
+        date: dateRaw,
+        receivedAtMs,
+        raw: item,
+    };
+}
+
+function parseMailApiResponse(rawBody, status) {
+    const body = String(rawBody ?? "").trim();
+    if (!body) {
+        return {ok: false, status, error: "empty response", mails: []};
+    }
+
+    // HTML page: extract text + possible codes
+    if (body.startsWith("<") || /<!DOCTYPE/i.test(body)) {
+        const stripped = body
+            .replace(/<script[\s\S]*?<\/script>/gi, " ")
+            .replace(/<style[\s\S]*?<\/style>/gi, " ")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&nbsp;/g, " ")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&amp;/g, "&")
+            .replace(/\s+/g, " ")
+            .trim();
+        const code = extractCodeFromText(stripped);
+        if (code) {
+            return {
+                ok: true,
+                status,
+                error: "",
+                mails: [
+                    {
+                        id: `html|${code}`,
+                        send: "",
+                        subject: "",
+                        text: stripped.slice(0, 2000),
+                        verificationCode: code,
+                        date: "",
+                        receivedAtMs: 0,
+                        raw: {html: true},
+                    },
+                ],
+            };
+        }
+        return {ok: false, status, error: stripped.slice(0, 200) || "html without code", mails: []};
+    }
+
+    let payload;
+    try {
+        payload = JSON.parse(body);
+    } catch {
+        // Plain code response
+        const plain = body.replace(/\D/g, "");
+        if (/^\d{4,8}$/.test(plain)) {
+            return {
+                ok: true,
+                status,
+                error: "",
+                mails: [
+                    {
+                        id: `plain|${plain}`,
+                        send: "",
+                        subject: "",
+                        text: body,
+                        verificationCode: plain,
+                        date: "",
+                        receivedAtMs: 0,
+                        raw: {plain: true},
+                    },
+                ],
+            };
+        }
+        return {ok: false, status, error: `non-json body: ${body.slice(0, 160)}`, mails: []};
+    }
+
+    if (payload && typeof payload === "object" && !Array.isArray(payload) && payload.error) {
+        return {
+            ok: false,
+            status,
+            error: String(payload.error || payload.message || "api error"),
+            mails: [],
+        };
+    }
+
+    const list = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : Array.isArray(payload?.mails)
+            ? payload.mails
+            : payload && typeof payload === "object"
+              ? [payload]
+              : [];
+
+    const mails = list
+        .map((item, index) => normalizeApiMailItem(item, index))
+        .filter(Boolean)
+        .filter((m) => m.verificationCode || m.text || m.subject);
+
+    return {ok: mails.length > 0, status, error: mails.length ? "" : "no mails", mails};
+}
+
+async function fetchMailApiMails(account) {
+    const url = String(account.mailApiUrl || "").trim();
+    if (!url) {
+        throw new Error(`API 取件账号缺少 URL: ${account.loginHint}`);
+    }
+
+    let response;
+    try {
+        response = await fetch(url, {
+            method: "GET",
+            headers: {
+                Accept: "application/json, text/plain, */*",
+                "User-Agent": "at-maker/0.0.3 mailapi",
+            },
+            signal: AbortSignal.timeout(60_000),
+        });
+    } catch (err) {
+        throw new Error(`mailapi network: ${String(err).slice(0, 160)}`);
+    }
+
+    const rawBody = await response.text();
+    const parsed = parseMailApiResponse(rawBody, response.status);
+
+    // 404 "未找到符合规则的邮件" is a normal wait state
+    if (!parsed.ok) {
+        const soft =
+            response.status === 404 ||
+            /未找到|no mail|not found|empty|no mails/i.test(parsed.error || "");
+        if (soft) {
+            return {waiting: true, error: parsed.error || `HTTP ${response.status}`, mails: []};
+        }
+        if (response.status === 410 || /过期|expired/i.test(parsed.error || "")) {
+            throw new Error(`mailapi 订单已过期: ${parsed.error}`);
+        }
+        if (response.status === 401 || /认证失败|auth/i.test(parsed.error || "")) {
+            throw new Error(`mailapi 邮箱认证失败: ${parsed.error}`);
+        }
+        if (response.status === 400) {
+            throw new Error(`mailapi 参数错误: ${parsed.error}`);
+        }
+        if (!response.ok) {
+            throw new Error(`mailapi HTTP ${response.status}: ${parsed.error || rawBody.slice(0, 160)}`);
+        }
+        return {waiting: true, error: parsed.error || "no code yet", mails: []};
+    }
+
+    return {waiting: false, error: "", mails: parsed.mails};
+}
+
+function mailAgeSec(mail) {
+    const ts = Number(mail?.receivedAtMs || 0);
+    if (!ts) return -1;
+    return Math.round((Date.now() - ts) / 1000);
+}
+
+/** True when mailapi message is likely the OTP for the current registration. */
+function isApiMailFresh(mail, sinceMs) {
+    const ageSec = mailAgeSec(mail);
+    // No timestamp: mailapi often returns only the latest matching mail — treat as usable.
+    if (ageSec < 0) return true;
+    // Hard stale: OpenAI OTP is short-lived
+    if (ageSec > 15 * 60) return false;
+    // Relative to registration/baseline window (allow clock skew)
+    const since = Number(sinceMs || 0);
+    if (since > 0 && mail.receivedAtMs > 0 && mail.receivedAtMs < since - 180_000) {
+        return false;
+    }
+    return true;
+}
+
+function pickApiVerificationCode(email, mails, options = {}) {
+    // Only codes OpenAI already rejected (or truly old baseline), not "visible at baseline"
+    const rejected = otpBaselineCodes.get(email) || new Set();
+    const baselineIds = otpBaselineIds.get(email) || new Set();
+    const since = Number(otpStartTime.get(email) || 0);
+    const skipCode = String(options.skipCode || "");
+
+    const sorted = [...mails].sort(
+        (a, b) => Number(b.receivedAtMs || 0) - Number(a.receivedAtMs || 0),
+    );
+
+    const tryPick = (requireOpenAi) => {
+        for (const mail of sorted) {
+            const code = String(mail.verificationCode || "").replace(/\D/g, "");
+            if (!code || code.length < 4 || code.length > 8) continue;
+            // Only skip baseline ids for clearly OLD mails; fresh same-id is the OTP we need
+            // (mailapi often returns a single latest message with stable synthetic id)
+            if (baselineIds.has(String(mail.id)) && !isApiMailFresh(mail, since)) continue;
+            if (rejected.has(code)) continue;
+            if (skipCode && code === skipCode) continue;
+            if (!isApiMailFresh(mail, since)) continue;
+
+            if (requireOpenAi) {
+                const blob = `${mail.send}\n${mail.subject}\n${mail.text}`.slice(0, 1500);
+                const looksOpenAi =
+                    !blob.trim() ||
+                    isOpenAiMail({
+                        subject: mail.subject,
+                        bodyPreview: mail.text.slice(0, 400),
+                        from: mail.send,
+                        bodyContent: mail.text,
+                    });
+                if (!looksOpenAi && sorted.length > 1) continue;
+            }
+
+            return {code, mail};
+        }
+        return null;
+    };
+
+    return tryPick(true) || tryPick(false);
+}
+
+/**
+ * Snapshot mailbox for API pickup.
+ *
+ * mailapi.icu usually returns ONLY the latest matching mail. OpenAI often lands
+ * on /email-verification without a separate send step, so the real OTP may already
+ * be visible when baseline runs. Never blacklist fresh/current codes here —
+ * only remember truly old ones. Wrong codes are rejected after OpenAI says so.
+ */
+async function captureApiOtpBaseline(targetEmail, account) {
+    try {
+        const since = Number(otpStartTime.get(targetEmail) || Date.now());
+        const result = await fetchMailApiMails(account);
+        const ids = new Set();
+        const codes = new Set();
+        const visible = [];
+        let keptFresh = 0;
+
+        for (const mail of result.mails || []) {
+            const code = String(mail.verificationCode || "").replace(/\D/g, "");
+            const ageSec = mailAgeSec(mail);
+            visible.push(`${code || "?"}@${ageSec}s`);
+
+            if (isApiMailFresh(mail, since)) {
+                keptFresh += 1;
+                continue;
+            }
+
+            if (mail.id) ids.add(String(mail.id));
+            if (code) {
+                codes.add(code);
+                markVerificationCodeRejected(targetEmail, code);
+            }
+        }
+
+        otpBaselineIds.set(targetEmail, ids);
+        otpBaselineCodes.set(targetEmail, codes);
+        console.log(
+            `mailapiOtpBaseline: mailbox=${account.loginHint} staleMails=${ids.size} staleCodes=[${[...codes].join(",")}] keptFresh=${keptFresh} visible=[${visible.join(",")}] waiting=${!!result.waiting} url=${String(account.mailApiUrl || "").slice(0, 80)}`,
+        );
+        return {ids, codes};
+    } catch (err) {
+        console.log(`mailapiOtpBaseline error: ${String(err).slice(0, 200)}`);
+        otpBaselineIds.set(targetEmail, new Set());
+        otpBaselineCodes.set(targetEmail, new Set());
+        return {ids: new Set(), codes: new Set()};
+    }
+}
+
+async function pollMailApiVerificationCode(email, account) {
+    let lastError = "";
+    let lastReturnedCode = "";
+    // API path: slightly longer window; first mail can lag after authorize_continue
+    const maxAttempts = Math.max(HOTMAIL_POLL_ATTEMPTS, 24);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (_abortController?.signal.aborted) {
+            throw new Error("Registration aborted by user");
+        }
+
+        console.log(
+            `pollMailApiOtp: attempt=${attempt}/${maxAttempts} targetEmail=${email} mailbox=${account.loginHint}`,
+        );
+
+        try {
+            const result = await fetchMailApiMails(account);
+            if (result.waiting) {
+                lastError = result.error || "waiting";
+                if (attempt === 1 || attempt % 5 === 0) {
+                    console.log(`pollMailApiOtp wait: ${lastError}`);
+                }
+            } else {
+                const codesPreview = (result.mails || [])
+                    .map((m) => {
+                        const c = String(m.verificationCode || "").replace(/\D/g, "") || "?";
+                        return `${c}@${mailAgeSec(m)}s`;
+                    })
+                    .slice(0, 5)
+                    .join(",");
+                const picked = pickApiVerificationCode(email, result.mails, {
+                    skipCode: lastReturnedCode,
+                });
+                if (picked?.code) {
+                    const ageSec = mailAgeSec(picked.mail);
+                    if (ageSec >= 0 && ageSec > 15 * 60) {
+                        console.log(
+                            `mailapiOtpSkip: code=${picked.code} too old ageSec=${ageSec} id=${picked.mail.id || ""}`,
+                        );
+                        markVerificationCodeRejected(email, picked.code);
+                        const set = otpBaselineCodes.get(email) || new Set();
+                        set.add(picked.code);
+                        otpBaselineCodes.set(email, set);
+                        if (picked.mail.id) {
+                            const ids = otpBaselineIds.get(email) || new Set();
+                            ids.add(String(picked.mail.id));
+                            otpBaselineIds.set(email, ids);
+                        }
+                    } else {
+                        console.log(
+                            `mailapiOtpCode: ${picked.code} ageSec=${ageSec} from=${picked.mail.send || "-"} subject=${String(picked.mail.subject || "").slice(0, 60)}`,
+                        );
+                        lastReturnedCode = picked.code;
+                        return picked.code;
+                    }
+                } else {
+                    lastError = `no usable code (visible=[${codesPreview}] rejected=[${[...(otpBaselineCodes.get(email) || [])].join(",")}])`;
+                    if (attempt === 1 || attempt % 5 === 0) {
+                        console.log(`pollMailApiOtp skip: ${lastError}`);
+                    }
+                }
+            }
+        } catch (err) {
+            lastError = String(err);
+            console.log(`pollMailApiOtp error: ${lastError.slice(0, 200)}`);
+            // Hard failures (expired/auth/bad params) should not keep spinning forever
+            if (/订单已过期|认证失败|参数错误/.test(lastError)) {
+                throw err;
+            }
+        }
+
+        if (attempt < maxAttempts) {
+            await sleepAbortable(HOTMAIL_POLL_INTERVAL_MS);
+        }
+    }
+
+    clearOtpState(email);
+    throw new Error(
+        "mailapi 中未找到验证码: targetEmail=" +
+            email +
+            (lastError ? ` lastError=${lastError.slice(0, 160)}` : ""),
+    );
+}
+
 async function sleepAbortable(ms) {
     const step = 250;
     for (let w = 0; w < ms; w += step) {
@@ -1069,6 +1536,11 @@ export function createHotmailProvider() {
             const account = chooseRandomAccount(accounts);
             const aliasEmail = buildAliasAddress(account);
             aliasAccountMap.set(normalizeEmail(aliasEmail), account);
+            if (isApiMailAccount(account)) {
+                console.log(
+                    `registerEmail(api): ${aliasEmail} url=${String(account.mailApiUrl || "").slice(0, 100)}`,
+                );
+            }
             return aliasEmail;
         },
         /**
@@ -1084,10 +1556,18 @@ export function createHotmailProvider() {
             const account = await resolveAccountForEmail(email);
             clearOtpState(email);
             clearRememberedVerificationCode(email);
+            // Drop previous-run rejects so reused API mailboxes can get a new OTP
+            clearRejectedVerificationCodes(email);
             // since = now, before OTP is requested (or slightly before if validate-only path)
-            otpStartTime.set(email, Date.now() - 5_000);
+            // API path often already has the OTP (flow jumps to /email-verification);
+            // keep a wider window so fresh mails are not treated as pre-baseline junk.
+            otpStartTime.set(email, Date.now() - (isApiMailAccount(account) ? 120_000 : 5_000));
             try {
-                await captureOtpBaseline(email, account);
+                if (isApiMailAccount(account)) {
+                    await captureApiOtpBaseline(email, account);
+                } else {
+                    await captureOtpBaseline(email, account);
+                }
             } catch (err) {
                 console.log(`hotmailOtpBaseline error: ${String(err).slice(0, 200)}`);
                 otpBaselineIds.set(email, new Set());
@@ -1103,8 +1583,13 @@ export function createHotmailProvider() {
                 console.log(`[otp] prepareOtpBaseline was not called; capturing late baseline for ${email}`);
                 // Wide window: OTP may have arrived up to ~2 min ago when flow skips sendEmailOtp
                 otpStartTime.set(email, Date.now() - 120_000);
+                clearRejectedVerificationCodes(email);
                 try {
-                    await captureOtpBaseline(email, account);
+                    if (isApiMailAccount(account)) {
+                        await captureApiOtpBaseline(email, account);
+                    } else {
+                        await captureOtpBaseline(email, account);
+                    }
                 } catch (err) {
                     console.log(`hotmailOtpBaseline error: ${String(err).slice(0, 200)}`);
                     otpBaselineIds.set(email, new Set());
@@ -1113,6 +1598,11 @@ export function createHotmailProvider() {
                 clearRememberedVerificationCode(email);
             } else if (!otpStartTime.has(email)) {
                 otpStartTime.set(email, Date.now() - 90_000);
+            }
+
+            // mailapi.icu / HTTP orderNo pickup path
+            if (isApiMailAccount(account)) {
+                return pollMailApiVerificationCode(email, account);
             }
 
             let lastError = "";

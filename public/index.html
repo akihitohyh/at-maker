@@ -49,7 +49,7 @@ button.danger:hover{background:#f85149}
 </label>
 </div>
 
-<label>别名后缀（空白=不加别名，如输入 +1 则生成 email+1@domain）</label>
+<label>别名后缀（OAuth 与 API 取件均生效；空白=不加别名，如输入 +1 则生成 email+1@domain）</label>
 <div style="display:flex;gap:12px;align-items:center">
 <input id="aliasSuffix" placeholder="留空表示不加别名" style="flex:1">
 <label style="margin:0;display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer">
@@ -63,8 +63,8 @@ button.danger:hover{background:#f85149}
 <label>注册数量</label>
 <input id="totalRounds" type="number" value="10" min="1" max="1000">
 
-<label>邮箱池（一行一个：邮箱----密码----client_id----refresh_token）</label>
-<textarea id="emailPool" placeholder="email@outlook.com----password----client_id----refresh_token"></textarea>
+<label>邮箱池（一行一个；支持 OAuth 与 API 取件）</label>
+<textarea id="emailPool" placeholder="email@outlook.com----password----client_id----refresh_token&#10;Tommye.Baude@outlook.com----https://mailapi.icu/key?type=html&orderNo=订单号"></textarea>
 
 <div class="btn-row">
 <button onclick="saveConfig()">💾 保存配置</button>
