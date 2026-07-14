@@ -17,7 +17,7 @@ AT Maker 提供 CLI 和 WebUI，用于执行 OpenAI 账号注册流程，保存 
 - 注册代理支持 HTTP、HTTPS、SOCKS4 和 SOCKS5
 - WebUI 可检测代理出口 IP 及 `chatgpt.com` 可达性
 - 注册成功后保存 ChatGPT AT，并尝试通过 OAuth PKCE 获取 RT
-- AT 文本下载及 oumiFree/Codex 格式 RT JSON 下载
+- AT 文本下载及 Codex 格式 RT JSON 下载
 - 可选连接 chatgpt2api，注册一个自动上传一个，优先上传 RT
 - 验证码基线、历史验证码过滤、错误验证码重试和任务立即中断
 
