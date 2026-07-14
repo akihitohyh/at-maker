@@ -2,6 +2,10 @@
 
 AT Maker 提供 CLI 和 WebUI，用于执行 OpenAI 账号注册流程，保存 ChatGPT access token，并尝试获取平台 OAuth refresh token。
 
+## 本项目赞助商
+
+[汪汪中转站](https://api.hyhawang.com/)：1 元 1 刀，GPT 低至 0.03x。
+
 > 本项目仅供学习、研究和接口行为测试。使用者应自行确保用途符合目标平台服务条款、当地法律法规及所在网络环境的合规要求。
 
 ## 功能
@@ -256,7 +260,7 @@ OAuth PKCE 失败不会使整个注册结果失败，AT 仍会保存。
 - 新增 TempMail.lol 与 YYDS Mail Provider
 - 新增代理出口 IP 与 ChatGPT 可达性检测
 - 新增平台 OAuth PKCE RT 获取
-- 新增 Codex 格式 RT 保存和下载
+- 新增 oumiFree/Codex 格式 RT 保存和下载
 - 新增 chatgpt2api 连接检测及注册后自动上传
 - WebUI 重构为配置面板与实时日志双栏界面
 - 扩展配置文件、运行状态和下载接口
