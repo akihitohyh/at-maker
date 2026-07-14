@@ -256,7 +256,7 @@ OAuth PKCE 失败不会使整个注册结果失败，AT 仍会保存。
 - 新增 TempMail.lol 与 YYDS Mail Provider
 - 新增代理出口 IP 与 ChatGPT 可达性检测
 - 新增平台 OAuth PKCE RT 获取
-- 新增 oumiFree/Codex 格式 RT 保存和下载
+- 新增 Codex 格式 RT 保存和下载
 - 新增 chatgpt2api 连接检测及注册后自动上传
 - WebUI 重构为配置面板与实时日志双栏界面
 - 扩展配置文件、运行状态和下载接口
