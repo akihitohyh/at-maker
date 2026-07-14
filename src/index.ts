@@ -10,11 +10,40 @@ async function runOnce(): Promise<void> {
         deviceProfile,
     });
     await client.authRegisterHTTP();
-    const accessToken = await client.getChatGPTAccessToken();
-    const accessTokenFile = await client.saveChatGPTAccessToken(accessToken);
+    const session = await client.getChatGPTSession();
+
+    let refreshToken = "";
+    let idToken = "";
+    let platformAccessToken = "";
+    try {
+        console.log("[OAuth PKCE] 获取 refresh_token...");
+        const oauth = await client.getPlatformOAuthTokens();
+        if (oauth?.refresh_token) {
+            refreshToken = oauth.refresh_token;
+            idToken = oauth.id_token || "";
+            platformAccessToken = oauth.access_token || "";
+            console.log("[OAuth PKCE] 成功，已拿到 RT");
+        } else {
+            console.log("[OAuth PKCE] 未获取到 refresh_token");
+        }
+    } catch (err) {
+        console.log(
+            `[OAuth PKCE] 警告: ${err instanceof Error ? err.message : String(err)}`,
+        );
+    }
+
+    const accessTokenFile = await client.saveChatGPTAccessToken(session.accessToken, {
+        refreshToken,
+        idToken,
+        sessionToken: session.sessionToken,
+        platformAccessToken,
+    });
     console.log(`[✅️注册成功] 邮箱：${client.email} 密码：${appConfig.defaultPassword}`);
     console.log(`[access_token_file] ${accessTokenFile}`);
-    console.log(`[access_token] ${accessToken}`);
+    console.log(`[access_token] ${session.accessToken}`);
+    if (refreshToken) {
+        console.log(`[refresh_token] ${refreshToken.slice(0, 24)}...`);
+    }
 }
 
 async function main() {

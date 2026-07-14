@@ -5,127 +5,430 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AT Maker</title>
 <style>
+:root{
+  --bg:#0b0d12;
+  --panel:#12151c;
+  --panel-2:#171b24;
+  --border:#2a3140;
+  --border-soft:#232833;
+  --text:#e8eaed;
+  --muted:#8b93a7;
+  --accent:#3d8bfd;
+  --ok:#3dd68c;
+  --ok-bg:rgba(61,214,140,.12);
+  --bad:#f07178;
+  --bad-bg:rgba(240,113,120,.12);
+  --warn:#e6b450;
+  --btn:#1c2230;
+  --btn-hover:#262d3d;
+  --primary:#1f6feb;
+  --primary-hover:#388bfd;
+  --danger:#da3633;
+  --danger-hover:#f85149;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Noto Sans SC",sans-serif;
+  --radius:10px;
+}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e1e4e8;min-height:100vh}
-.container{max-width:800px;margin:0 auto;padding:24px 16px}
-h1{font-size:20px;font-weight:600;margin-bottom:24px;text-align:center}
-label{display:block;font-size:13px;color:#8b949e;margin-bottom:4px;margin-top:14px}
-input,textarea{width:100%;padding:8px 12px;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#e1e4e8;font-size:14px;font-family:inherit;outline:none;resize:vertical}
-input:focus,textarea:focus{border-color:#58a6ff}
-textarea{height:160px;font-size:12px;font-family:'SF Mono',Consolas,monospace}
-.btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}
-button{padding:8px 16px;border:1px solid #30363d;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;background:#21262d;color:#c9d1d9;transition:all .15s}
-button:hover{background:#30363d}
-button:disabled{opacity:.5;cursor:not-allowed}
-button.primary{background:#238636;border-color:#238636;color:#fff}
-button.primary:hover{background:#2ea043}
-button.danger{background:#da3633;border-color:#da3633;color:#fff}
-button.danger:hover{background:#f85149}
-#progress{border:1px solid #30363d;border-radius:6px;margin-top:20px;min-height:100px;max-height:600px;overflow-y:auto;padding:12px;font-size:12px;font-family:'SF Mono',Consolas,monospace;background:#0d1117;white-space:pre-wrap;word-break:break-all}
-#progress .s{color:#3fb950}#progress .f{color:#f85149}#progress .i{color:#8b949e}#progress .l{color:#c9d1d9}
-.stats{display:flex;gap:24px;margin-bottom:12px;font-size:14px}
-.stats b{color:#58a6ff}
-.spin{display:inline-block;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-.hidden{display:none}
+html,body{height:100%}
+body{
+  font-family:var(--sans);
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  overflow:hidden;
+}
+.app{
+  height:100vh;
+  display:grid;
+  grid-template-rows:56px 1fr;
+}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 18px;
+  border-bottom:1px solid var(--border-soft);
+  background:linear-gradient(180deg,#12161f 0%,#0e1219 100%);
+}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-mark{
+  width:28px;height:28px;border-radius:8px;
+  background:linear-gradient(135deg,#1f6feb,#3dd68c);
+  display:grid;place-items:center;
+  font-size:13px;font-weight:700;color:#fff;
+}
+.brand h1{font-size:15px;font-weight:650;letter-spacing:.2px}
+.brand span{font-size:12px;color:var(--muted);margin-left:2px}
+.layout{
+  display:grid;
+  /* form left (wider ~2x), logs right */
+  grid-template-columns:minmax(560px,840px) minmax(0,1fr);
+  min-height:0;
+  height:100%;
+}
+/* form panel (left) */
+.pane-form{
+  min-height:0;overflow:auto;
+  background:var(--panel);
+  padding:14px 16px 28px;
+  border-right:1px solid var(--border-soft);
+}
+/* logs panel (right) */
+.pane-log{
+  display:flex;flex-direction:column;min-height:0;min-width:0;
+  background:var(--bg);
+}
+.stats-bar{
+  display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+  padding:12px 16px;
+  border-bottom:1px solid var(--border-soft);
+  background:var(--panel);
+}
+.stat-chip{
+  display:flex;align-items:baseline;gap:6px;
+  padding:6px 10px;border-radius:8px;
+  background:var(--panel-2);border:1px solid var(--border-soft);
+  font-size:12px;color:var(--muted);
+}
+.stat-chip b{font-size:15px;color:var(--accent);font-variant-numeric:tabular-nums}
+.stat-chip.ok b{color:var(--ok)}
+.stat-chip.bad b{color:var(--bad)}
+.live-dot{
+  width:8px;height:8px;border-radius:50%;background:var(--ok);
+  box-shadow:0 0 0 0 rgba(61,214,140,.6);
+  animation:pulse 1.4s infinite;
+}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(61,214,140,.55)}
+  70%{box-shadow:0 0 0 8px rgba(61,214,140,0)}
+  100%{box-shadow:0 0 0 0 rgba(61,214,140,0)}
+}
+.log-wrap{flex:1;min-height:0;display:flex;flex-direction:column;padding:12px 16px 16px}
+.log-head{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:8px;
+}
+.log-head h2{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+#progress{
+  flex:1;min-height:0;overflow:auto;
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:12px 14px;
+  font-size:12.5px;line-height:1.55;
+  font-family:var(--mono);
+  background:#0a0c10;
+  white-space:pre-wrap;word-break:break-all;
+}
+#progress .s{color:var(--ok)}
+#progress .f{color:var(--bad)}
+#progress .i{color:var(--muted)}
+#progress .l{color:#c6cddb}
+#progress .row-log{padding:1px 0}
+.section{
+  border:1px solid var(--border-soft);
+  border-radius:var(--radius);
+  padding:12px 14px;
+  margin-bottom:12px;
+  background:var(--panel-2);
+}
+.section-title{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  font-size:13px;font-weight:650;color:var(--text);margin-bottom:6px;
+}
+.hint{font-size:11.5px;color:var(--muted);line-height:1.5;margin-bottom:8px}
+label.field{
+  display:block;font-size:12px;color:var(--muted);
+  margin:10px 0 5px;
+}
+label.field:first-of-type{margin-top:2px}
+input[type=text],input[type=password],input[type=number],textarea,select{
+  width:100%;padding:9px 11px;
+  background:#0d1016;border:1px solid var(--border);
+  border-radius:8px;color:var(--text);
+  font-size:13px;font-family:inherit;outline:none;
+}
+select{cursor:pointer;appearance:auto}
+textarea{min-height:120px;resize:vertical;font-family:var(--mono);font-size:12px;line-height:1.45}
+input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(61,139,253,.15)}
+.row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.row > input{flex:1;min-width:140px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.inline-opts{display:flex;gap:12px;flex-wrap:wrap;margin-top:4px}
+.inline-opts label{
+  margin:0;display:flex;align-items:center;gap:5px;
+  font-size:12px;color:var(--text);cursor:pointer;user-select:none;
+}
+.inline-opts input{accent-color:var(--accent)}
+button{
+  padding:8px 12px;border:1px solid var(--border);border-radius:8px;
+  font-size:12.5px;font-weight:550;cursor:pointer;
+  background:var(--btn);color:var(--text);transition:background .12s,border-color .12s;
+  white-space:nowrap;
+}
+button:hover{background:var(--btn-hover)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+button.primary:hover{background:var(--primary-hover);border-color:var(--primary-hover)}
+button.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+button.danger:hover{background:var(--danger-hover);border-color:var(--danger-hover)}
+button.ghost{background:transparent}
+.btn-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.btn-grid .span2{grid-column:1/-1}
+.badge{
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:11.5px;padding:3px 9px;border-radius:999px;
+  border:1px solid var(--border);color:var(--muted);background:#0d1016;
+}
+.badge.ok{color:var(--ok);border-color:rgba(61,214,140,.35);background:var(--ok-bg)}
+.badge.bad{color:var(--bad);border-color:rgba(240,113,120,.35);background:var(--bad-bg)}
+.badge.idle{color:var(--muted)}
+.hidden{display:none !important}
+.spin{display:inline-block;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.footer-note{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.4}
+
+@media (max-width:1100px){
+  body{overflow:auto}
+  .app{height:auto;min-height:100vh}
+  .layout{grid-template-columns:1fr;height:auto}
+  .pane-form{border-right:none;border-bottom:1px solid var(--border-soft);max-height:none}
+  .pane-log{min-height:42vh}
+  #progress{min-height:240px}
+}
 </style>
 </head>
 <body>
-<div class="container">
-<h1>AT Maker</h1>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">AT</div>
+      <div>
+        <h1>AT Maker</h1>
+      </div>
+      <span>注册 · 取码 · 上传</span>
+    </div>
+  </header>
 
-<label>代理地址</label>
-<input id="proxyUrl" placeholder="http://user:pass@host:port">
+  <div class="layout">
+    <!-- LEFT: controls (wider) -->
+    <aside class="pane-form">
+      <div class="section">
+        <div class="section-title">
+          <span>网络代理</span>
+          <span id="proxyBadge" class="badge idle">未检测</span>
+        </div>
+        <div class="hint">注册流量走此代理。支持 http / https / socks5。</div>
+        <label class="field">代理地址</label>
+        <input id="proxyUrl" type="text" placeholder="http://user:pass@host:port" oninput="onProxyInput()">
+        <div class="row">
+          <button id="btnTestProxy" onclick="testProxy()">检测代理</button>
+        </div>
+      </div>
 
-<label>接码模式</label>
-<div style="display:flex;gap:16px;flex-wrap:wrap">
-<label style="margin:0;display:flex;align-items:center;gap:4px;cursor:pointer">
-<input type="radio" name="mailApiMode" value="auto" onchange="saveMailApiMode()" checked> 自动（推荐）
-</label>
-<label style="margin:0;display:flex;align-items:center;gap:4px;cursor:pointer">
-<input type="radio" name="mailApiMode" value="imap" onchange="saveMailApiMode()"> IMAP（outlook 权限）
-</label>
-<label style="margin:0;display:flex;align-items:center;gap:4px;cursor:pointer">
-<input type="radio" name="mailApiMode" value="graph" onchange="saveMailApiMode()"> Graph API
-</label>
-</div>
+      <div class="section">
+        <div class="section-title">
+          <span>chatgpt2api 上传</span>
+          <span id="c2aBadge" class="badge idle">未配置</span>
+        </div>
+        <div class="hint">连接成功后：注册一个上传一个（优先 RT，无 RT 再 AT）。失败则只落本地。</div>
+        <label class="field">服务地址</label>
+        <input id="c2aUrl" type="text" placeholder="http://127.0.0.1:3000" oninput="onC2aInput()">
+        <label class="field">鉴权 Key</label>
+        <input id="c2aKey" type="password" placeholder="admin auth-key" autocomplete="off" oninput="onC2aInput()">
+        <div class="row">
+          <button id="btnTestC2a" class="hidden" onclick="testC2a()">检测连接</button>
+        </div>
+      </div>
 
-<label>别名后缀（OAuth 与 API 取件均生效；空白=不加别名，如输入 +1 则生成 email+1@domain）</label>
-<div style="display:flex;gap:12px;align-items:center">
-<input id="aliasSuffix" placeholder="留空表示不加别名" style="flex:1">
-<label style="margin:0;display:flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer">
-<input type="checkbox" id="randomAlias" onchange="saveRandomAlias()"> 随机后缀
-</label>
-</div>
+      <div class="section">
+        <div class="section-title"><span>邮箱 Provider</span></div>
+        <div class="hint">注册用邮箱来源。微软池走本地 tokens；TempMail / YYDS 按 API 现场开箱接码。</div>
+        <label class="field">Provider</label>
+        <select id="emailProvider" onchange="onProviderChange()">
+          <option value="hotmail">本地微软邮箱池</option>
+          <option value="tempmail">TempMail.lol</option>
+          <option value="yyds">YYDS Mail</option>
+        </select>
 
-<label>线程数</label>
-<input id="threads" type="number" value="5" min="1" max="20">
+        <div id="panelHotmail">
+          <label class="field">接码模式（微软池）</label>
+          <div class="inline-opts">
+            <label><input type="radio" name="mailApiMode" value="auto" onchange="saveMailApiMode()" checked> 自动</label>
+            <label><input type="radio" name="mailApiMode" value="imap" onchange="saveMailApiMode()"> IMAP</label>
+            <label><input type="radio" name="mailApiMode" value="graph" onchange="saveMailApiMode()"> Graph</label>
+          </div>
+          <label class="field">别名后缀</label>
+          <div class="row" style="margin-top:0">
+            <input id="aliasSuffix" type="text" placeholder="留空=不加；如 +1">
+            <label style="margin:0;display:flex;align-items:center;gap:5px;font-size:12px;white-space:nowrap;cursor:pointer">
+              <input type="checkbox" id="randomAlias" onchange="saveRandomAlias()"> 随机
+            </label>
+          </div>
+        </div>
 
-<label>注册数量</label>
-<input id="totalRounds" type="number" value="10" min="1" max="1000">
+        <div id="panelTempmail" class="hidden">
+          <label class="field">TempMail API Key（可选）</label>
+          <input id="tempmailApiKey" type="password" placeholder="Bearer key；国内免费层通常需要 Plus key" autocomplete="off">
+          <p class="footer-note">文档：tempmail.lol API v2 · POST /inbox/create · GET /inbox?token=</p>
+        </div>
 
-<label>邮箱池（一行一个；支持 OAuth 与 API 取件）</label>
-<textarea id="emailPool" placeholder="email@outlook.com----password----client_id----refresh_token&#10;Tommye.Baude@outlook.com----https://mailapi.icu/key?type=html&orderNo=订单号"></textarea>
+        <div id="panelYyds" class="hidden">
+          <label class="field">YYDS API Key（必填）</label>
+          <input id="yydsApiKey" type="password" placeholder="X-API-Key，通常以 AC- 开头" autocomplete="off">
+          <label class="field">域名 domain（可选）</label>
+          <input id="yydsDomain" type="text" placeholder="留空则走 /accounts/wildcard 自动分配">
+          <label class="field">Base URL（可选）</label>
+          <input id="yydsBaseUrl" type="text" placeholder="https://maliapi.215.im/v1">
+          <p class="footer-note">文档：POST /v1/accounts|/accounts/wildcard · GET /messages/next</p>
+        </div>
+      </div>
 
-<div class="btn-row">
-<button onclick="saveConfig()">💾 保存配置</button>
-<button onclick="updateEmailPool()">📧 更新邮箱池</button>
-<button id="btnStart" class="primary" onclick="startReg()">▶ 开始注册</button>
-<button id="btnStop" class="danger hidden" onclick="stopReg()">⏹ 停止注册</button>
-<button id="btnDownload" onclick="downloadTokens()">⬇ 下载 access_tokens.txt</button>
-<button onclick="clearLogs()">🗑 清空日志</button>
-</div>
+      <div class="section">
+        <div class="section-title"><span>任务参数</span></div>
+        <div class="grid-2">
+          <div>
+            <label class="field">线程数</label>
+            <input id="threads" type="number" value="1" min="1" max="20">
+          </div>
+          <div>
+            <label class="field">注册数量</label>
+            <input id="totalRounds" type="number" value="1" min="1" max="1000">
+          </div>
+        </div>
+        <div id="panelEmailPool">
+          <label class="field">邮箱池（一行一个，仅本地微软）</label>
+          <textarea id="emailPool" placeholder="email----password----client_id----refresh_token&#10;email----https://mailapi.../orderNo=..."></textarea>
+        </div>
+        <div class="btn-grid">
+          <button onclick="saveConfig()">保存配置</button>
+          <button id="btnUpdatePool" onclick="updateEmailPool()">更新邮箱池</button>
+          <button id="btnStart" class="primary span2" onclick="startReg()">开始注册</button>
+          <button id="btnStop" class="danger span2 hidden" onclick="stopReg()">停止注册</button>
+          <button onclick="downloadTokens()">下载 AT</button>
+          <button onclick="downloadRefreshTokens()">下载 RT</button>
+        </div>
+        <p class="footer-note">本地归档始终写入 auth/；连接 chatgpt2api 成功时额外自动上传。</p>
+      </div>
+    </aside>
 
-<div class="stats" id="stats" style="margin-top:20px">
-  <span>成功: <b id="statOk">0</b></span>
-  <span>失败: <b id="statFail">0</b></span>
-  <span>进度: <b id="statProg">0/0</b></span>
-  <span id="statRunning" class="hidden">🔵运行中 <span class="spin">⟳</span></span>
-</div>
-
-<div id="progress"><div class="i">等待开始...</div></div>
+    <!-- RIGHT: output -->
+    <section class="pane-log">
+      <div class="stats-bar">
+        <div class="stat-chip ok">成功 <b id="statOk">0</b></div>
+        <div class="stat-chip bad">失败 <b id="statFail">0</b></div>
+        <div class="stat-chip">进度 <b id="statProg">0/0</b></div>
+        <div id="statRunning" class="stat-chip hidden" style="color:var(--ok)">
+          <span class="live-dot"></span> 运行中 <span class="spin">⟳</span>
+        </div>
+        <div style="flex:1"></div>
+        <button class="ghost" onclick="clearLogs()">清空日志</button>
+      </div>
+      <div class="log-wrap">
+        <div class="log-head">
+          <h2>运行日志</h2>
+          <span class="badge idle" id="logHint">实时输出</span>
+        </div>
+        <div id="progress"><div class="i">等待开始…</div></div>
+      </div>
+    </section>
+  </div>
 </div>
 
 <script>
 const $=id=>document.getElementById(id);
 let logLines=[];
-const MAX_LOG_LINES = 2000;
+const MAX_LOG_LINES=3000;
+let c2aConnected=false;
+let proxyOk=false;
+
+function currentProvider(){
+  return ($('emailProvider').value||'hotmail').trim();
+}
+function onProviderChange(){
+  const p=currentProvider();
+  $('panelHotmail').classList.toggle('hidden',p!=='hotmail');
+  $('panelTempmail').classList.toggle('hidden',p!=='tempmail');
+  $('panelYyds').classList.toggle('hidden',p!=='yyds');
+  $('panelEmailPool').classList.toggle('hidden',p!=='hotmail');
+  $('btnUpdatePool').classList.toggle('hidden',p!=='hotmail');
+}
 
 function addLog(msg,cls='i'){
-  logLines.push([cls,msg]);
-  while(logLines.length > MAX_LOG_LINES) logLines.shift();
-  $('progress').innerHTML=logLines.map(([c,m])=>`<div class="${c}">${m}</div>`).join('');
+  const ts=new Date().toLocaleTimeString('zh-CN',{hour12:false});
+  logLines.push([cls,`[${ts}] ${msg}`]);
+  while(logLines.length>MAX_LOG_LINES) logLines.shift();
+  $('progress').innerHTML=logLines.map(([c,m])=>`<div class="row-log ${c}">${escapeHtml(m)}</div>`).join('');
   $('progress').scrollTop=$('progress').scrollHeight;
+}
+function escapeHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function setBadge(id,state,text){
+  const el=$(id);
+  el.className='badge '+(state||'idle');
+  el.textContent=text||'';
+}
+
+function c2aFieldsFilled(){
+  return !!($('c2aUrl').value.trim() && $('c2aKey').value.trim());
+}
+function onC2aInput(){
+  const filled=c2aFieldsFilled();
+  $('btnTestC2a').classList.toggle('hidden',!filled);
+  if(!filled){c2aConnected=false;setBadge('c2aBadge','idle','未配置')}
+  else if(!c2aConnected) setBadge('c2aBadge','idle','待检测');
+}
+function onProxyInput(){
+  proxyOk=false;
+  setBadge('proxyBadge','idle',$('proxyUrl').value.trim()?'待检测':'未填写');
+}
+
+async function api(url,body){
+  const r=await fetch(url,{
+    method:body!==undefined?'POST':'GET',
+    headers:body!==undefined?{'content-type':'application/json'}:undefined,
+    body:body!==undefined?JSON.stringify(body):undefined,
+  });
+  return r.json();
 }
 
 async function saveMailApiMode(){
   const mode=document.querySelector('input[name="mailApiMode"]:checked').value;
   await api('/api/mail-api-mode',{mode});
 }
-
 async function saveRandomAlias(){
   await api('/api/random-alias',{enabled:$('randomAlias').checked});
 }
-
 function clearLogs(){
   logLines=[];
   $('progress').innerHTML='<div class="i">日志已清空</div>';
 }
 
-async function api(url,body){
-  const r=await fetch(url,{method:body?'POST':'GET',headers:body?{'content-type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});
-  return r.json();
-}
-
-// SSE
 const evt=new EventSource('/api/events');
 evt.addEventListener('progress',e=>{
   const d=JSON.parse(e.data);
-  if(d.type==='success'){addLog(`✅ 第${d.round}轮 成功 ${d.email}`, 's');$('statOk').textContent=d.success;$('statProg').textContent=d.round+'/'+d.total}
-  else if(d.type==='fail'){addLog(`❌ 第${d.round}轮 失败 ${d.error}`, 'f');$('statFail').textContent=d.fail;$('statProg').textContent=d.round+'/'+d.total}
-  else if(d.type==='progress'){$('statProg').textContent=d.round+'/'+d.total;addLog(`[${d.round}/${d.total}] 开始注册...`,'i')}
-  else if(d.type==='stopped'){setRunning(false);addLog(d.message||'已立即停止','s')}
-  else if(d.type==='done'){onDone();addLog(`===== 结束: 成功=${d.success} 失败=${d.fail} =====`,'i')}
-  else if(d.type==='log'){addLog(d.message||'', 'l')}
+  if(d.type==='success'){
+    const rtTag=d.hasRefreshToken?' +RT':' (无RT)';
+    const upTag=d.uploaded?` ↑${d.uploadMode||'ok'}`:'';
+    addLog(`第${d.round}轮 成功 ${d.email}${rtTag}${upTag}`,'s');
+    $('statOk').textContent=d.success;
+    $('statProg').textContent=d.round+'/'+d.total;
+  }else if(d.type==='fail'){
+    addLog(`第${d.round}轮 失败 ${d.error}`,'f');
+    $('statFail').textContent=d.fail;
+    $('statProg').textContent=d.round+'/'+d.total;
+  }else if(d.type==='progress'){
+    $('statProg').textContent=d.round+'/'+d.total;
+    addLog(`[${d.round}/${d.total}] 开始注册…`,'i');
+  }else if(d.type==='stopped'){
+    setRunning(false);
+    addLog(d.message||'已立即停止','s');
+  }else if(d.type==='done'){
+    onDone();
+    addLog(`结束: 成功=${d.success} 失败=${d.fail}`,'i');
+  }else if(d.type==='log'){
+    addLog(d.message||'','l');
+  }
 });
 
 async function loadConfig(){
@@ -135,9 +438,22 @@ async function loadConfig(){
     $('emailPool').value=r.emailPool||'';
     $('aliasSuffix').value=r.aliasSuffix||'';
     $('randomAlias').checked=r.randomAliasEnabled||false;
+    $('c2aUrl').value=r.config.chatgpt2apiBaseUrl||'http://127.0.0.1:3000';
+    $('c2aKey').value=r.config.chatgpt2apiAuthKey||'';
+    $('emailProvider').value=r.emailProvider||r.config.emailProvider||'hotmail';
+    $('tempmailApiKey').value=r.tempmailApiKey||r.config.tempmailApiKey||'';
+    $('yydsApiKey').value=r.yydsApiKey||r.config.yydsApiKey||'';
+    $('yydsDomain').value=r.yydsDomain||r.config.yydsDomain||'';
+    $('yydsBaseUrl').value=r.yydsBaseUrl||r.config.yydsBaseUrl||'https://maliapi.215.im/v1';
+    c2aConnected=!!r.chatgpt2apiConnected;
     const mailMode=r.mailApiMode||'auto';
     const radio=document.querySelector('input[name="mailApiMode"][value="'+mailMode+'"]');
     if(radio) radio.checked=true;
+    onProviderChange();
+    onC2aInput();
+    onProxyInput();
+    if(c2aConnected && c2aFieldsFilled()) setBadge('c2aBadge','ok','已连接');
+    if($('proxyUrl').value.trim()) setBadge('proxyBadge','idle','待检测');
   }
   const s=await api('/api/status');
   if(s.running) setRunning(true);
@@ -148,48 +464,168 @@ function setRunning(v){
   $('btnStart').classList.toggle('hidden',v);
   $('btnStop').classList.toggle('hidden',!v);
   $('statRunning').classList.toggle('hidden',!v);
+  $('logHint').textContent=v?'运行中':'实时输出';
+  $('logHint').className='badge '+(v?'ok':'idle');
 }
 function onDone(){setRunning(false)}
 
 async function saveConfig(){
-  const r=await api('/api/config',{proxyUrl:$('proxyUrl').value.trim(),loopDelayMs:1000,password:'kuaileshifu88'});
-  const aliasSuffix=$('aliasSuffix').value.trim();
-  const a=await api('/api/alias-suffix',{suffix:aliasSuffix});
-  addLog((r.ok&&a.ok)?'配置已保存':'保存失败: '+(r.error||a.error), (r.ok&&a.ok)?'s':'f');
+  const r=await api('/api/config',{
+    proxyUrl:$('proxyUrl').value.trim(),
+    loopDelayMs:1000,
+    password:'kuaileshifu88',
+    chatgpt2apiBaseUrl:$('c2aUrl').value.trim(),
+    chatgpt2apiAuthKey:$('c2aKey').value,
+    emailProvider:currentProvider(),
+    tempmailApiKey:$('tempmailApiKey').value.trim(),
+    yydsApiKey:$('yydsApiKey').value.trim(),
+    yydsDomain:$('yydsDomain').value.trim(),
+    yydsBaseUrl:$('yydsBaseUrl').value.trim(),
+  });
+  let a={ok:true};
+  if(currentProvider()==='hotmail'){
+    a=await api('/api/alias-suffix',{suffix:$('aliasSuffix').value.trim()});
+  }
+  if(r.ok && !c2aConnected) setBadge('c2aBadge',c2aFieldsFilled()?'idle':'idle',c2aFieldsFilled()?'待检测':'未配置');
+  const names={hotmail:'本地微软',tempmail:'TempMail',yyds:'YYDS'};
+  const tag=names[currentProvider()]||currentProvider();
+  addLog((r.ok&&a.ok)?`配置已保存 · provider=${tag}`:'保存失败: '+(r.error||a.error),(r.ok&&a.ok)?'s':'f');
 }
+
+async function testProxy(){
+  const proxyUrl=$('proxyUrl').value.trim();
+  if(!proxyUrl){addLog('请先填写代理地址','f');return}
+  $('btnTestProxy').disabled=true;
+  setBadge('proxyBadge','idle','检测中…');
+  addLog('正在检测代理…','i');
+  try{
+    const r=await api('/api/proxy/test',{proxyUrl});
+    proxyOk=!!r.ok;
+    if(r.ok){
+      const ip=r.egressIp?` 出口IP ${r.egressIp}`:'';
+      const ms=r.latencyMs!=null?` ${r.latencyMs}ms`:'';
+      const st=r.chatgptStatus!=null?` chatgpt=${r.chatgptStatus}`:'';
+      setBadge('proxyBadge','ok','可用');
+      addLog(`代理可用${ms}${ip}${st} (${r.protocol}://${r.proxyHost}:${r.proxyPort})`,'s');
+    }else{
+      setBadge('proxyBadge','bad','失败');
+      addLog('代理检测失败: '+(r.error||'unknown'),'f');
+    }
+  }catch(err){
+    proxyOk=false;
+    setBadge('proxyBadge','bad','失败');
+    addLog('代理检测异常: '+err,'f');
+  }finally{
+    $('btnTestProxy').disabled=false;
+  }
+}
+
+async function testC2a(){
+  if(!c2aFieldsFilled()){addLog('请先填写 chatgpt2api 地址和鉴权 key','f');return}
+  $('btnTestC2a').disabled=true;
+  setBadge('c2aBadge','idle','检测中…');
+  addLog('正在检测 chatgpt2api…','i');
+  try{
+    await api('/api/config',{
+      proxyUrl:$('proxyUrl').value.trim(),
+      loopDelayMs:1000,
+      password:'kuaileshifu88',
+      chatgpt2apiBaseUrl:$('c2aUrl').value.trim(),
+      chatgpt2apiAuthKey:$('c2aKey').value,
+    });
+    const r=await api('/api/chatgpt2api/test',{
+      baseUrl:$('c2aUrl').value.trim(),
+      authKey:$('c2aKey').value,
+    });
+    c2aConnected=!!r.ok;
+    if(r.ok){
+      const n=r.accountCount!==undefined?`，号池 ${r.accountCount} 个`:'';
+      setBadge('c2aBadge','ok','已连接');
+      addLog(`chatgpt2api 连接成功${n}`,'s');
+    }else{
+      setBadge('c2aBadge','bad','失败');
+      addLog('chatgpt2api 连接失败: '+(r.error||'unknown'),'f');
+    }
+  }catch(err){
+    c2aConnected=false;
+    setBadge('c2aBadge','bad','失败');
+    addLog('chatgpt2api 检测异常: '+err,'f');
+  }finally{
+    $('btnTestC2a').disabled=false;
+  }
+}
+
 async function updateEmailPool(){
+  if(currentProvider()!=='hotmail'){
+    addLog('当前 provider 非本地微软，无需邮箱池','i');
+    return {ok:true,skipped:true};
+  }
   const emails=$('emailPool').value.trim();
-  if(!emails){addLog('邮箱池不能为空','f');return}
+  if(!emails){addLog('邮箱池不能为空','f');return {ok:false};}
   const r=await api('/api/email-pool',{emails});
-  addLog(r.ok?`邮箱池已更新，${r.count} 个账号`:'更新失败: '+r.error, r.ok?'s':'f');
+  addLog(r.ok?`邮箱池已更新，${r.count} 个账号`:'更新失败: '+r.error,r.ok?'s':'f');
+  return r;
 }
+
 async function startReg(){
   const proxyUrl=$('proxyUrl').value.trim();
   if(!proxyUrl){addLog('请填写代理地址','f');return}
-  const threads=parseInt($('threads').value)||5;
-  const totalRounds=parseInt($('totalRounds').value)||10;
-  // auto-save config & email pool before starting
+  const p=currentProvider();
+  if(p==='yyds' && !$('yydsApiKey').value.trim()){
+    addLog('YYDS 需要填写 API Key（AC- 开头）','f');return;
+  }
+  const threads=parseInt($('threads').value)||1;
+  const totalRounds=parseInt($('totalRounds').value)||1;
+  $('statOk').textContent='0';
+  $('statFail').textContent='0';
+  $('statProg').textContent='0/'+totalRounds;
   await saveConfig();
-  await updateEmailPool();
+  if(p==='hotmail'){
+    const pool=await updateEmailPool();
+    if(pool && pool.ok===false) return;
+  }
   const r=await api('/api/start',{proxyUrl,threads,totalRounds,password:'kuaileshifu88',loopDelayMs:1000});
-  if(r.ok){setRunning(true);addLog(`开始: ${threads}线程 ${totalRounds}个`,'i')}
-  else addLog('启动失败: '+r.error,'f');
+  if(r.ok){
+    setRunning(true);
+    const names={hotmail:'本地微软',tempmail:'TempMail',yyds:'YYDS'};
+    const mode=r.chatgpt2apiConfigured?'· 已配置自动上传':'· 仅本地保存';
+    addLog(`开始: ${threads} 线程 × ${totalRounds} 个 · ${names[r.emailProvider||p]||p} ${mode}`,'i');
+  }else addLog('启动失败: '+r.error,'f');
 }
+
 async function stopReg(){
-  addLog('正在立即停止当前任务...','i');
+  addLog('正在立即停止…','i');
   setRunning(false);
   const r=await api('/api/stop');
-  addLog(r && r.ok===false ? ('停止失败: '+(r.error||'unknown')) : '已立即中断，无需等待本轮结束','s');
+  addLog(r&&r.ok===false?('停止失败: '+(r.error||'unknown')):'已立即中断','s');
 }
+
 async function downloadTokens(){
   const resp=await fetch('/api/download');
-  if(!resp.ok){addLog('暂无文件可下载','f');return}
+  if(!resp.ok){addLog('暂无 access_tokens.txt','f');return}
   const blob=await resp.blob();
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
   a.download=`access_tokens_${Date.now()}.txt`;
   a.click();
-  addLog('下载完成，服务端已删除旧文件','s');
+  addLog('AT 下载完成，服务端已删除汇总文件','s');
+}
+async function downloadRefreshTokens(){
+  const resp=await fetch('/api/download-rt');
+  if(!resp.ok){
+    let msg='暂无 RT 账号';
+    try{const j=await resp.json();if(j.error)msg=j.error}catch{}
+    addLog(msg,'f');return;
+  }
+  const blob=await resp.blob();
+  const cd=resp.headers.get('content-disposition')||'';
+  const m=cd.match(/filename="?([^";]+)"?/i);
+  const filename=m?m[1]:(blob.type.includes('zip')?`codex_${Date.now()}.zip`:`account_${Date.now()}.json`);
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=filename;
+  a.click();
+  addLog('RT 下载完成（oumiFree 格式），待下载池已清空','s');
 }
 </script>
 </body>

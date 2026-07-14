@@ -1,5 +1,12 @@
 {
   "defaultProxyUrl": "http://127.0.0.1:10808",
   "defaultPassword": "kuaileshifu88",
-  "loopDelayMs": 30000
+  "loopDelayMs": 30000,
+  "emailProvider": "hotmail",
+  "tempmailApiKey": "",
+  "yydsApiKey": "",
+  "yydsBaseUrl": "https://maliapi.215.im/v1",
+  "yydsDomain": "",
+  "chatgpt2apiBaseUrl": "http://127.0.0.1:3000",
+  "chatgpt2apiAuthKey": ""
 }

@@ -1,4 +1,5 @@
 import {mkdir, writeFile, appendFile} from "node:fs/promises";
+import crypto from "node:crypto";
 import net from "node:net";
 import tls from "node:tls";
 import path from "node:path";
@@ -13,10 +14,16 @@ import {
     AUTH_BASE_URL,
     AUTH_EMAIL_OTP_SEND_URL,
     AUTH_EMAIL_OTP_VALIDATE_URL,
+    AUTH_OAUTH_AUTHORIZE_URL,
+    AUTH_OAUTH_TOKEN_URL,
     AUTH_REGISTER_URL,
     CHATGPT_AUTH_CSRF_URL,
     CHATGPT_BASE_URL,
     DEFAULT_USER_AGENT,
+    PLATFORM_OAUTH_AUDIENCE,
+    PLATFORM_OAUTH_AUTH0_CLIENT,
+    PLATFORM_OAUTH_CLIENT_ID,
+    PLATFORM_OAUTH_REDIRECT_URI,
 } from "./constants.js";
 import {
     getEmailAddress,
@@ -186,11 +193,31 @@ interface ContinueResponse {
 interface ChatGPTAuthSession {
     accessToken?: string;
     access_token?: string;
+    sessionToken?: string;
+    session_token?: string;
     error?: string;
 }
 
 interface ChatGPTAccessTokenClaims {
     exp?: number;
+}
+
+/** Platform OAuth PKCE token response (oumiFree-compatible) */
+export interface PlatformOAuthTokens {
+    access_token?: string;
+    refresh_token?: string;
+    id_token?: string;
+    expires_in?: number;
+    token_type?: string;
+    scope?: string;
+}
+
+export interface SaveAuthTokenOptions {
+    refreshToken?: string;
+    idToken?: string;
+    sessionToken?: string;
+    /** Prefer platform AT when present (codex style); default keeps ChatGPT session AT */
+    platformAccessToken?: string;
 }
 
 export interface OpenAIClientOptions {
@@ -302,6 +329,11 @@ export class OpenAIClient {
     }
 
     async getChatGPTAccessToken(): Promise<string> {
+        const session = await this.getChatGPTSession();
+        return session.accessToken;
+    }
+
+    async getChatGPTSession(): Promise<{accessToken: string; sessionToken: string}> {
         const response = await this.fetch(`${CHATGPT_BASE_URL}/api/auth/session`, {
             method: "GET",
             headers: this.createBrowserHeaders({
@@ -321,10 +353,156 @@ export class OpenAIClient {
         if (!accessToken) {
             throw new Error(`ChatGPT session 中缺少 accessToken: ${JSON.stringify(payload)}`);
         }
-        return accessToken;
+        const sessionToken = String(payload.sessionToken ?? payload.session_token ?? "").trim();
+        return {accessToken, sessionToken};
     }
 
-    async saveChatGPTAccessToken(accessToken: string): Promise<string> {
+    /**
+     * Platform OAuth PKCE — same flow as oumiFree `_oauth_get_tokens`.
+     * Uses the post-registration session cookies to authorize and exchange a code
+     * for refresh_token / id_token / access_token.
+     */
+    async getPlatformOAuthTokens(): Promise<PlatformOAuthTokens | null> {
+        throwIfRegistrationAborted();
+
+        const codeVerifier = crypto.randomBytes(64).toString("base64url");
+        const codeChallenge = crypto
+            .createHash("sha256")
+            .update(codeVerifier)
+            .digest("base64url");
+
+        const deviceId = this.deviceID || crypto.randomUUID();
+        const state = crypto.randomBytes(32).toString("base64url");
+        const nonce = crypto.randomBytes(32).toString("base64url");
+
+        // Ensure oai-did is visible on auth.openai.com (oumiFree sets this explicitly)
+        try {
+            await this.jar.setCookie(
+                `oai-did=${deviceId}; Domain=.auth.openai.com; Path=/`,
+                AUTH_BASE_URL,
+            );
+            await this.jar.setCookie(
+                `oai-did=${deviceId}; Domain=.openai.com; Path=/`,
+                "https://openai.com",
+            );
+        } catch (err) {
+            console.log(`oauth setCookie oai-did warning: ${String(err).slice(0, 120)}`);
+        }
+
+        const params = new URLSearchParams({
+            issuer: AUTH_BASE_URL,
+            client_id: PLATFORM_OAUTH_CLIENT_ID,
+            audience: PLATFORM_OAUTH_AUDIENCE,
+            redirect_uri: PLATFORM_OAUTH_REDIRECT_URI,
+            device_id: deviceId,
+            screen_hint: "login",
+            max_age: "0",
+            login_hint: this.email || "",
+            scope: "openid profile email offline_access",
+            response_type: "code",
+            response_mode: "query",
+            state,
+            nonce,
+            code_challenge: codeChallenge,
+            code_challenge_method: "S256",
+            auth0Client: PLATFORM_OAUTH_AUTH0_CLIENT,
+        });
+
+        const authUrl = `${AUTH_OAUTH_AUTHORIZE_URL}?${params.toString()}`;
+        console.log(`oauthAuthorize: ${authUrl.slice(0, 140)}...`);
+
+        const authorizeResp = await this.fetch(authUrl, {
+            method: "GET",
+            redirect: "follow",
+            headers: this.createBrowserHeaders({
+                accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "accept-encoding": "gzip, deflate, br",
+                "auth0-client": PLATFORM_OAUTH_AUTH0_CLIENT,
+                "sec-fetch-dest": "document",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "none",
+                referer: `${CHATGPT_BASE_URL}/`,
+            }),
+        });
+
+        const finalUrl = authorizeResp.url || "";
+        console.log(
+            `oauthAuthorize: status=${authorizeResp.status} final_url=${finalUrl.slice(0, 160)}`,
+        );
+
+        let code = "";
+        try {
+            code = new URL(finalUrl).searchParams.get("code")?.trim() ?? "";
+        } catch {
+            code = "";
+        }
+
+        // Fallback: some stacks land on a page that embeds the code in Location history only;
+        // try parsing Location-like patterns from body if final URL has no code.
+        if (!code) {
+            try {
+                const body = await authorizeResp.text();
+                const m =
+                    body.match(/[?&]code=([A-Za-z0-9._~+/-]+)/) ||
+                    body.match(/"code"\s*:\s*"([^"]+)"/);
+                if (m?.[1]) {
+                    code = m[1];
+                } else {
+                    console.log(`oauthAuthorize: no code, body snippet=${body.slice(0, 240)}`);
+                }
+            } catch {
+                // ignore
+            }
+        }
+
+        if (!code) {
+            console.log("oauthAuthorize: 未获取到 authorization code");
+            return null;
+        }
+        console.log(`oauthAuthorize: code=${code.slice(0, 20)}...`);
+
+        throwIfRegistrationAborted();
+
+        const tokenBody = new URLSearchParams({
+            client_id: PLATFORM_OAUTH_CLIENT_ID,
+            code_verifier: codeVerifier,
+            grant_type: "authorization_code",
+            code,
+            redirect_uri: PLATFORM_OAUTH_REDIRECT_URI,
+        });
+
+        const tokenResp = await this.fetch(AUTH_OAUTH_TOKEN_URL, {
+            method: "POST",
+            headers: this.createBrowserHeaders({
+                accept: "application/json",
+                "content-type": "application/x-www-form-urlencoded",
+                origin: AUTH_BASE_URL,
+                referer: `${AUTH_BASE_URL}/`,
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+            }),
+            body: tokenBody.toString(),
+        });
+
+        console.log(`oauthToken: status=${tokenResp.status}`);
+        if (!tokenResp.ok) {
+            const errText = await tokenResp.text().catch(() => "");
+            console.log(`oauthToken: failed body=${errText.slice(0, 240)}`);
+            return null;
+        }
+
+        const tokens = (await tokenResp.json()) as PlatformOAuthTokens;
+        console.log(
+            `oauthToken: ok keys=${Object.keys(tokens).join(",")} rt=${tokens.refresh_token ? "yes" : "no"}`,
+        );
+        return tokens;
+    }
+
+    async saveChatGPTAccessToken(
+        accessToken: string,
+        extras: SaveAuthTokenOptions = {},
+    ): Promise<string> {
         const atDir = path.resolve(process.cwd(), "auth", "at");
         await mkdir(atDir, {recursive: true});
         const fileName = this.buildAuthFileName(this.email);
@@ -333,25 +511,69 @@ export class OpenAIClient {
         const expiresAt = accessClaims.exp
             ? new Date(accessClaims.exp * 1000).toISOString()
             : "";
-        await writeFile(
-            filePath,
-            `${JSON.stringify({
-                access_token: accessToken,
+
+        const refreshToken = extras.refreshToken?.trim() || "";
+        const idToken = extras.idToken?.trim() || "";
+        const sessionToken = extras.sessionToken?.trim() || "";
+        const platformAccessToken = extras.platformAccessToken?.trim() || "";
+        const hasRt = Boolean(refreshToken);
+
+        // ChatGPT session AT always goes to access_tokens.txt
+        const sessionAt = accessToken;
+        // oumiFree: prefer platform OAuth access_token when RT flow succeeds
+        const exportAt = platformAccessToken || sessionAt;
+
+        let payload: Record<string, unknown>;
+        if (hasRt) {
+            // Exact oumiFree / codex export schema
+            payload = {
+                type: "codex",
+                email: this.email,
+                password: this.password,
+                expired: "",
+                id_token: idToken,
+                account_id: "",
+                disabled: false,
+                access_token: exportAt,
+                session_token: sessionToken,
+                workspace_id: "",
+                last_refresh: formatLastRefreshCst(),
+                refresh_token: refreshToken,
+            };
+        } else {
+            payload = {
+                type: "chatgpt",
+                access_token: sessionAt,
                 expires_at: expiresAt,
                 expires_in: accessClaims.exp
                     ? Math.max(0, Math.floor(accessClaims.exp - Date.now() / 1000))
                     : 0,
                 email: this.email,
+                password: this.password,
                 cookie: await this.jar.getCookieString(CHATGPT_BASE_URL),
                 last_refresh: new Date().toISOString(),
-                type: "chatgpt",
-            }, null, 2)}\n`,
-            "utf8",
-        );
-        // Also append access_token to centralized txt (one per line)
+            };
+            if (sessionToken) {
+                payload.session_token = sessionToken;
+            }
+        }
+
+        await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+
+        // ChatGPT access tokens (one per line) — always the session AT
         const tokenListFile = path.resolve(process.cwd(), "auth", "access_tokens.txt");
         await mkdir(path.dirname(tokenListFile), {recursive: true});
-        await appendFile(tokenListFile, accessToken + "\n", "utf8");
+        await appendFile(tokenListFile, sessionAt + "\n", "utf8");
+
+        // oumiFree-style per-account JSON: auth/codex/{email}.json
+        if (hasRt) {
+            const codexDir = path.resolve(process.cwd(), "auth", "codex");
+            await mkdir(codexDir, {recursive: true});
+            const codexName = `${this.email.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")}.json`;
+            const codexPath = path.join(codexDir, codexName);
+            await writeFile(codexPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+        }
+
         return filePath;
     }
 
@@ -971,4 +1193,21 @@ function collectErrorMessages(error: unknown): string[] {
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** oumiFree last_refresh: "YYYY-MM-DD HH:mm:ss +0800" */
+function formatLastRefreshCst(): string {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+    }).formatToParts(new Date());
+    const get = (type: Intl.DateTimeFormatPartTypes): string =>
+        parts.find((p) => p.type === type)?.value ?? "00";
+    return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")} +0800`;
 }

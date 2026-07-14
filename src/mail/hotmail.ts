@@ -1280,7 +1280,7 @@ async function fetchMailApiMails(account) {
             method: "GET",
             headers: {
                 Accept: "application/json, text/plain, */*",
-                "User-Agent": "at-maker/0.0.3 mailapi",
+                "User-Agent": "at-maker/0.1.0 mailapi",
             },
             signal: AbortSignal.timeout(60_000),
         });
